@@ -321,6 +321,12 @@ func newCodexStatusErrWithCooling(statusCode int, body []byte, modelLevelCooling
 	if isCodexModelCapacityError(body) || isUsageLimit {
 		errCode = http.StatusTooManyRequests
 	}
+	if !isUsageLimit && isCodexTransientCapacityError(body) {
+		// Codex clients render rate_limit_error 429s as "usage limit reached";
+		// surface transient capacity errors as an overloaded 503 instead.
+		errCode = http.StatusServiceUnavailable
+		body = codexOverloadedBody(body)
+	}
 	body = classifyCodexStatusError(errCode, body)
 	err := statusErr{code: errCode, msg: string(body), credentialScoped: credentialScoped}
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
@@ -397,6 +403,25 @@ func isCodexModelCapacityError(errorBody []byte) bool {
 		}
 	}
 	return false
+}
+
+// isCodexTransientCapacityError reports whether Codex rejected the turn with
+// turn_rate_limit_exceeded (service at capacity, e.g. rapid /goal continuation
+// turns), which is unrelated to quota.
+func isCodexTransientCapacityError(errorBody []byte) bool {
+	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(errorBody, "error.code").String()), "turn_rate_limit_exceeded")
+}
+
+func codexOverloadedBody(body []byte) []byte {
+	message := gjson.GetBytes(body, "error.message").String()
+	if message == "" {
+		message = "Codex is at capacity, please try again later"
+	}
+	out := []byte(`{"error":{}}`)
+	out, _ = sjson.SetBytes(out, "error.message", message)
+	out, _ = sjson.SetBytes(out, "error.type", "server_error")
+	out, _ = sjson.SetBytes(out, "error.code", "server_is_overloaded")
+	return out
 }
 
 // isCodexUsageLimitError reports whether the error body represents a Codex
