@@ -15,7 +15,7 @@ import (
 )
 
 // MetadataOfficialClientOnly is the credential metadata key that restricts a
-// Claude or Codex credential to requests issued by that provider's official CLI.
+// supported credential to requests issued by that provider's official CLI.
 const MetadataOfficialClientOnly = "official_client_only"
 
 // OfficialClientRequiredCode is the Error code returned when every credential
@@ -23,7 +23,7 @@ const MetadataOfficialClientOnly = "official_client_only"
 const OfficialClientRequiredCode = "official_client_required"
 
 // OfficialClientVerifier reports whether the inbound request described by opts
-// was issued by the official client of provider ("claude" or "codex").
+// was issued by the official client of provider.
 type OfficialClientVerifier func(ctx context.Context, provider string, opts cliproxyexecutor.Options) bool
 
 var officialClientVerifier atomic.Pointer[OfficialClientVerifier]
@@ -50,6 +50,8 @@ func officialClientName(provider string) string {
 		return "Claude Code"
 	case "codex":
 		return "Codex"
+	case "gemini-cli":
+		return "Gemini CLI"
 	default:
 		return ""
 	}

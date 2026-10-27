@@ -60,6 +60,7 @@ func TestPatchAuthFileFieldsOfficialClientOnly(t *testing.T) {
 	h, manager := newOfficialClientTestHandler(t,
 		&coreauth.Auth{ID: "claude.json", FileName: "claude.json", Provider: "claude", Status: coreauth.StatusActive, Metadata: map[string]any{"type": "claude"}},
 		&coreauth.Auth{ID: "codex.json", FileName: "codex.json", Provider: "codex", Status: coreauth.StatusActive, Metadata: map[string]any{"type": "codex"}},
+		&coreauth.Auth{ID: "gemini-cli.json", FileName: "gemini-cli.json", Provider: "gemini-cli", Status: coreauth.StatusActive, Metadata: map[string]any{"type": "gemini-cli"}},
 		&coreauth.Auth{ID: "gemini.json", FileName: "gemini.json", Provider: "gemini", Status: coreauth.StatusActive, Metadata: map[string]any{"type": "gemini"}},
 	)
 	restricted := func(id string) bool {
@@ -70,7 +71,7 @@ func TestPatchAuthFileFieldsOfficialClientOnly(t *testing.T) {
 		return auth.OfficialClientOnly()
 	}
 
-	for _, id := range []string{"claude.json", "codex.json"} {
+	for _, id := range []string{"claude.json", "codex.json", "gemini-cli.json"} {
 		if rec := patchAuthFileFieldsForTest(t, h, `{"name":"`+id+`","official_client_only":true}`); rec.Code != http.StatusOK {
 			t.Fatalf("enable %s: status = %d body=%s", id, rec.Code, rec.Body.String())
 		}

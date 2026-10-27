@@ -85,7 +85,8 @@ type Server struct {
 	wsAuthEnabled atomic.Bool
 
 	// management handler
-	mgmt *managementHandlers.Handler
+	mgmt                 *managementHandlers.Handler
+	quotaCollectorCancel context.CancelFunc
 
 	// usageState persists runtime usage state (request counters + token
 	// distribution) to a single file asynchronously. Nil when disabled.
@@ -304,6 +305,14 @@ func (s *Server) Start() error {
 	if s == nil || s.server == nil {
 		return fmt.Errorf("failed to start HTTP server: server not initialized")
 	}
+	if s.mgmt != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.listenerMu.Lock()
+		s.quotaCollectorCancel = cancel
+		s.listenerMu.Unlock()
+		s.mgmt.StartQuotaCollector(ctx)
+		defer cancel()
+	}
 
 	addr := s.server.Addr
 	listener, errListen := net.Listen("tcp", addr)
@@ -426,6 +435,12 @@ func (s *Server) Start() error {
 // Returns:
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
+	s.listenerMu.Lock()
+	cancelQuota := s.quotaCollectorCancel
+	s.listenerMu.Unlock()
+	if cancelQuota != nil {
+		cancelQuota()
+	}
 	log.Debug("Stopping API server...")
 
 	if s.keepAliveEnabled {

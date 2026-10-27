@@ -1206,6 +1206,12 @@ observability:
     # Record proxy request/response logs. Management requests are excluded.
     request-log: false
 
+  quota:
+    # Backend polls credential quota every five minutes, independently of the UI.
+    # History is stored beside this config in quota-history.json.
+    # Nonpositive values use the default of 14 days.
+    retention-days: 14
+
   usage:
     # When false, disable in-memory usage statistics aggregation
     usage-statistics-enabled: false

@@ -83,6 +83,9 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
+	// QuotaHistoryRetentionDays controls quota history retention; nonpositive values use 14 days.
+	QuotaHistoryRetentionDays int `yaml:"quota-history-retention-days" json:"quota-history-retention-days"`
+
 	// RedisUsageQueueRetentionSeconds controls how long usage queue items are retained
 	// in memory for Management API consumers.
 	// Default: 60. Max: 3600.

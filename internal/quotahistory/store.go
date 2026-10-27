@@ -3,6 +3,7 @@ package quotahistory
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,20 +27,22 @@ type Sample struct {
 	Name      string  `json:"name"`
 	At        int64   `json:"at"` // Unix milliseconds
 	Remaining float64 `json:"remaining"`
+	Window    string  `json:"window,omitempty"`
 }
 
 // Store is safe for concurrent use.
 type Store struct {
-	mu      sync.Mutex
-	path    string
-	samples []Sample
-	last    map[string]int64
-	now     func() time.Time
+	mu        sync.Mutex
+	path      string
+	samples   []Sample
+	last      map[string]int64
+	now       func() time.Time
+	retention time.Duration
 }
 
 // New loads the store from path (missing file is fine). An empty path keeps history in memory only.
 func New(path string) *Store {
-	s := &Store{path: path, last: map[string]int64{}, now: time.Now}
+	s := &Store{path: path, last: map[string]int64{}, now: time.Now, retention: Retention}
 	if path == "" {
 		return s
 	}
@@ -56,7 +59,7 @@ func New(path string) *Store {
 		return s
 	}
 	for _, sample := range s.samples {
-		key := sample.Provider + "\x00" + sample.Name
+		key := sampleKey(sample)
 		if sample.At > s.last[key] {
 			s.last[key] = sample.At
 		}
@@ -75,25 +78,22 @@ func (s *Store) Add(batch []Sample) int {
 	nowMs := s.now().UnixMilli()
 	kept := 0
 	for _, sample := range batch {
-		if sample.Name == "" || sample.Remaining < 0 || sample.Remaining > 100 {
+		if sample.Name == "" || math.IsNaN(sample.Remaining) || math.IsInf(sample.Remaining, 0) || sample.Remaining < 0 || sample.Remaining > 100 || (sample.Window != "" && sample.Window != "5h" && sample.Window != "weekly") {
 			continue
 		}
 		if sample.At <= 0 || sample.At > nowMs+int64(time.Minute/time.Millisecond) {
 			sample.At = nowMs
 		}
-		if sample.At < nowMs-int64(Retention/time.Millisecond) {
+		if sample.At < nowMs-int64(s.retention/time.Millisecond) {
 			continue
 		}
-		key := sample.Provider + "\x00" + sample.Name
-		if sample.At-s.last[key] < int64(minInterval/time.Millisecond) && sample.At >= s.last[key] {
+		key := sampleKey(sample)
+		if last, exists := s.last[key]; exists && sample.At-last < int64(minInterval/time.Millisecond) {
 			continue
 		}
 		s.last[key] = sample.At
 		s.samples = append(s.samples, sample)
 		kept++
-	}
-	if kept == 0 {
-		return 0
 	}
 	s.pruneLocked(nowMs)
 	s.saveLocked()
@@ -104,6 +104,9 @@ func (s *Store) Add(batch []Sample) int {
 func (s *Store) Since(sinceMs int64) []Sample {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pruneLocked(s.now().UnixMilli()) {
+		s.saveLocked()
+	}
 	out := make([]Sample, 0, len(s.samples))
 	for _, sample := range s.samples {
 		if sample.At >= sinceMs {
@@ -114,15 +117,39 @@ func (s *Store) Since(sinceMs int64) []Sample {
 	return out
 }
 
-func (s *Store) pruneLocked(nowMs int64) {
-	cutoff := nowMs - int64(Retention/time.Millisecond)
+func sampleKey(sample Sample) string {
+	return sample.Provider + "\x00" + sample.Name + "\x00" + sample.Window
+}
+
+// SetRetention applies a retention period and immediately removes expired samples.
+func (s *Store) SetRetention(retention time.Duration) {
+	if retention <= 0 {
+		retention = Retention
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retention = retention
+	if s.pruneLocked(s.now().UnixMilli()) {
+		s.saveLocked()
+	}
+}
+
+func (s *Store) pruneLocked(nowMs int64) bool {
+	cutoff := nowMs - int64(s.retention/time.Millisecond)
+	previous := len(s.samples)
 	kept := s.samples[:0]
+	s.last = make(map[string]int64)
 	for _, sample := range s.samples {
 		if sample.At >= cutoff {
 			kept = append(kept, sample)
+			key := sampleKey(sample)
+			if sample.At > s.last[key] {
+				s.last[key] = sample.At
+			}
 		}
 	}
 	s.samples = kept
+	return len(kept) != previous
 }
 
 func (s *Store) saveLocked() {

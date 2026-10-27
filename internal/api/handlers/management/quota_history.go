@@ -4,26 +4,28 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/quotahistory"
 )
 
-var (
-	quotaHistoryOnce  sync.Once
-	quotaHistoryStore *quotahistory.Store
-)
-
 func (h *Handler) quotaHistory() *quotahistory.Store {
-	quotaHistoryOnce.Do(func() {
+	h.quotaHistoryOnce.Do(func() {
 		path := ""
 		if h.configFilePath != "" {
 			path = filepath.Join(filepath.Dir(h.configFilePath), "quota-history.json")
 		}
-		quotaHistoryStore = quotahistory.New(path)
+		h.quotaHistoryStore = quotahistory.New(path)
 	})
-	return quotaHistoryStore
+	retention := quotahistory.Retention
+	if cfg := h.configSnapshot(); cfg != nil && cfg.QuotaHistoryRetentionDays > 0 {
+		// Bound the duration before multiplication to avoid integer overflow.
+		days := min(cfg.QuotaHistoryRetentionDays, 36500)
+		retention = time.Duration(days) * 24 * time.Hour
+	}
+	h.quotaHistoryStore.SetRetention(retention)
+	return h.quotaHistoryStore
 }
 
 // GetQuotaHistory returns recorded quota samples, optionally limited by ?since=<unix ms>.

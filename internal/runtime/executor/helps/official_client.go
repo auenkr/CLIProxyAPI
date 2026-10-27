@@ -3,6 +3,7 @@ package helps
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +26,8 @@ var officialClaudeEntrypoints = map[string]bool{
 	"sdk-py":        true,
 }
 
+var geminiCLIUserAgent = regexp.MustCompile(`^GeminiCLI(?:-[a-zA-Z0-9-]+)?/[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.-]+)?(?:/|\s|$)`)
+
 // NewOfficialClientVerifier returns the verifier that enforces the per-credential
 // official_client_only restriction. It inspects client-supplied headers and body,
 // so it is a policy gate against accidental or casual use of a subscription
@@ -44,6 +47,8 @@ func NewOfficialClientVerifier(currentConfig func() *config.Config) cliproxyauth
 			return IsOfficialClaudeCodeRequest(headers, opts.OriginalRequest, countTokens, cfg)
 		case "codex":
 			return codexoptimize.IsCodexClientUserAgent(headerValue(headers, "User-Agent"))
+		case "gemini-cli":
+			return geminiCLIUserAgent.MatchString(strings.TrimSpace(headerValue(headers, "User-Agent")))
 		default:
 			return false
 		}
