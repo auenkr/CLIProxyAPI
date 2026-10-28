@@ -1,6 +1,8 @@
 package api
 
 import (
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usagecost"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	"path/filepath"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -47,4 +49,22 @@ func newUsageState(cfg *config.Config, authManager *coreauth.Manager) *usagestat
 		log.Warnf("failed to load persisted usage state: %v", errLoad)
 	}
 	return manager
+}
+
+// newUsageCost builds the API-equivalent cost store and registers it as a usage
+// plugin. Price overrides come from model-pricing.json beside the config file.
+func newUsageCost(configFilePath string) *usagecost.Store {
+	path, pricingPath := "", ""
+	if configFilePath != "" {
+		dir := filepath.Dir(configFilePath)
+		path = filepath.Join(dir, "usage-cost.state")
+		pricingPath = filepath.Join(dir, "model-pricing.json")
+	}
+	overrides, errLoad := usagecost.LoadOverrides(pricingPath)
+	if errLoad != nil {
+		log.Warnf("usage cost: load %s: %v", pricingPath, errLoad)
+	}
+	store := usagecost.New(path, usagecost.NewPricer(overrides))
+	coreusage.RegisterPlugin(store)
+	return store
 }

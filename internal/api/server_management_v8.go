@@ -40,6 +40,7 @@ func (s *Server) registerManagementV8Routes() {
 	v8.GET("/observability/usage/api-keys", s.mgmt.GetAPIKeyUsage)
 	v8.GET("/observability/usage/queue", s.mgmt.GetUsageQueue)
 	v8.GET("/observability/usage/tokens", s.mgmt.GetTokenUsage)
+	v8.GET("/observability/usage/cost", s.mgmt.GetUsageCost)
 	v8.GET("/observability/quota/history", s.mgmt.GetQuotaHistory)
 	v8.POST("/observability/quota/history", s.mgmt.PostQuotaHistory)
 

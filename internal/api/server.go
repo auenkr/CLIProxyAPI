@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usagecost"
 	"net"
 	"net/http"
 	"os"
@@ -87,6 +88,7 @@ type Server struct {
 	// management handler
 	mgmt                 *managementHandlers.Handler
 	quotaCollectorCancel context.CancelFunc
+	usageCost            *usagecost.Store
 
 	// usageState persists runtime usage state (request counters + token
 	// distribution) to a single file asynchronously. Nil when disabled.
@@ -174,6 +176,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		pluginHost:                   optionState.pluginHost,
 		exampleAPIKeySafeModeEnabled: optionState.exampleAPIKeySafeMode,
 		usageState:                   newUsageState(cfg, authManager),
+		usageCost:                    newUsageCost(configFilePath),
 	}
 
 	// Add middleware
@@ -227,6 +230,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	applyClaudeToolSearchConfig(cfg)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
+	s.mgmt.SetUsageCost(s.usageCost)
 	s.mgmt.SetPluginHost(optionState.pluginHost)
 	s.mgmt.SetConfigReloadHook(optionState.configReloadHook)
 	if optionState.localPassword != "" {
@@ -311,6 +315,9 @@ func (s *Server) Start() error {
 		s.quotaCollectorCancel = cancel
 		s.listenerMu.Unlock()
 		s.mgmt.StartQuotaCollector(ctx)
+		if s.usageCost != nil {
+			go s.usageCost.Run(ctx)
+		}
 		defer cancel()
 	}
 

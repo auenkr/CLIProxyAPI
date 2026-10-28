@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usagecost"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,6 +67,7 @@ type Handler struct {
 	siwcCommitMu            sync.Mutex
 	quotaHistoryOnce        sync.Once
 	quotaHistoryStore       *quotahistory.Store
+	usageCost               *usagecost.Store
 }
 
 type configReloadSnapshot struct {
@@ -520,3 +522,6 @@ func (h *Handler) updateStringField(c *gin.Context, set func(string)) {
 	set(*body.Value)
 	h.persistLocked(c)
 }
+
+// SetUsageCost attaches the API-equivalent cost store served by GetUsageCost.
+func (h *Handler) SetUsageCost(store *usagecost.Store) { h.usageCost = store }
