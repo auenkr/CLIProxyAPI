@@ -4,6 +4,7 @@ package usagecost
 import (
 	"context"
 	"encoding/json"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/statemirror"
 	"os"
 	"path/filepath"
 	"sort"
@@ -79,6 +80,9 @@ type Store struct {
 	revision atomic.Uint64
 	saved    uint64
 	pricer   atomic.Pointer[Pricer]
+
+	mirror    statemirror.Mirror
+	mirrorKey string
 }
 
 // New loads the store from path (a missing file is fine). An empty path is memory only.
@@ -106,6 +110,13 @@ func New(path string, pricer *Pricer) *Store {
 	}
 	s.prune()
 	return s
+}
+
+// SetMirror mirrors flushed state to m under key.
+func (s *Store) SetMirror(m statemirror.Mirror, key string) {
+	s.mu.Lock()
+	s.mirror, s.mirrorKey = m, key
+	s.mu.Unlock()
 }
 
 // SetPricer swaps the price table; costs are computed at query time.
@@ -198,6 +209,7 @@ func (s *Store) flush() {
 		return
 	}
 	s.prune()
+	mirror, mirrorKey := s.mirror, s.mirrorKey
 	list := make([]bucket, 0, len(s.buckets))
 	for _, b := range s.buckets {
 		list = append(list, *b)
@@ -221,6 +233,15 @@ func (s *Store) flush() {
 	if err = os.Rename(tmp, s.path); err != nil {
 		log.Warnf("usage cost: rename: %v", err)
 		return
+	}
+	if mirror != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		errMirror := mirror.SaveState(ctx, mirrorKey, data)
+		cancel()
+		if errMirror != nil {
+			log.Warnf("usage cost: mirror: %v", errMirror)
+			return
+		}
 	}
 	s.mu.Lock()
 	s.saved = rev

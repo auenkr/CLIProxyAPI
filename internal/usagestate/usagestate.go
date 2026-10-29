@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/statemirror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/usageaggregate"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -79,6 +80,9 @@ type Manager struct {
 
 	flushMu sync.Mutex
 
+	mirror    statemirror.Mirror
+	mirrorKey string
+
 	mu              sync.Mutex
 	lastCountersRev uint64
 	lastTokensRev   uint64
@@ -99,6 +103,15 @@ func New(path string, interval time.Duration, counters CountersSource, tokens To
 	}
 }
 
+// SetMirror mirrors the state file to m under key. Call before Load.
+func (m *Manager) SetMirror(mirror statemirror.Mirror, key string) {
+	if m == nil {
+		return
+	}
+	m.mirror = mirror
+	m.mirrorKey = key
+}
+
 // UsageStatePath returns the state file path for an auth directory.
 func UsageStatePath(authDir string) string {
 	authDir = filepath.Clean(authDir)
@@ -113,6 +126,14 @@ func UsageStatePath(authDir string) string {
 func (m *Manager) Load() error {
 	if m == nil || m.path == "" {
 		return nil
+	}
+	if m.mirror != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		errRestore := statemirror.Restore(ctx, m.mirror, m.mirrorKey, m.path)
+		cancel()
+		if errRestore != nil {
+			log.Warnf("failed to restore usage state from mirror: %v", errRestore)
+		}
 	}
 	data, errRead := os.ReadFile(m.path)
 	if errRead != nil {
@@ -245,6 +266,11 @@ func (m *Manager) Flush(ctx context.Context) error {
 
 	if errWrite := writeFileAtomic(m.path, data); errWrite != nil {
 		return errWrite
+	}
+	if m.mirror != nil {
+		if errMirror := m.mirror.SaveState(ctx, m.mirrorKey, data); errMirror != nil {
+			return fmt.Errorf("mirror usage state: %w", errMirror)
+		}
 	}
 
 	// Only record the revisions after a successful write so a failure retries.

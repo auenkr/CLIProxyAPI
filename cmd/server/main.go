@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/statemirror"
 	"io"
 	"io/fs"
 	"net/url"
@@ -468,6 +469,7 @@ func main() {
 		}
 		cancel()
 		configFilePath = pgStoreInst.ConfigPath()
+		statemirror.SetDefault(pgStoreInst)
 		cfg, err = config.LoadConfigOptional(configFilePath, isCloudDeploy)
 		if err == nil {
 			cfg.AuthDir = pgStoreInst.AuthDir()

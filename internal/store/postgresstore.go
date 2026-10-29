@@ -34,6 +34,7 @@ type PostgresStoreConfig struct {
 	ConfigTable   string
 	AuthTable     string
 	CooldownTable string
+	StateTable    string
 	SpoolDir      string
 }
 
@@ -162,6 +163,9 @@ func (s *PostgresStore) EnsureSchema(ctx context.Context) error {
 		)
 	`, cooldownTable)); err != nil {
 		return fmt.Errorf("postgres store: create cooldown table: %w", err)
+	}
+	if err := s.ensureStateTable(ctx); err != nil {
+		return err
 	}
 	return nil
 }
