@@ -59,7 +59,40 @@ func (h *Handler) collectQuota(ctx context.Context) {
 			continue
 		}
 		store.Add(samples)
+		h.clearStaleQuotaCooldown(ctx, manager, auth, samples)
 	}
+}
+
+// clearStaleQuotaCooldown lifts a quota cooldown when the upstream usage probe
+// shows every window has headroom again, e.g. after a manual usage reset on the
+// provider side. It applies to any provider that reports 5h/weekly samples; the
+// proxy would otherwise only notice once the stored retry time passes.
+func (h *Handler) clearStaleQuotaCooldown(ctx context.Context, manager *coreauth.Manager, auth *coreauth.Auth, samples []quotahistory.Sample) {
+	if len(samples) == 0 || !hasQuotaCooldown(auth, time.Now()) {
+		return
+	}
+	for _, sample := range samples {
+		if sample.Remaining <= 0 {
+			return
+		}
+	}
+	if _, _, errReset := manager.ResetQuota(ctx, auth.ID); errReset != nil {
+		log.WithField("provider", auth.Provider).Debug("quota history: cooldown reset failed")
+		return
+	}
+	log.WithField("provider", auth.Provider).Info("quota history: upstream quota available again, cleared cooldown")
+}
+
+func hasQuotaCooldown(auth *coreauth.Auth, now time.Time) bool {
+	if auth.Quota.Exceeded && auth.Quota.NextRecoverAt.After(now) {
+		return true
+	}
+	for _, state := range auth.ModelStates {
+		if state != nil && state.Quota.Exceeded && state.Quota.NextRecoverAt.After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) collectCredentialQuota(ctx context.Context, auth *coreauth.Auth) ([]quotahistory.Sample, error) {
