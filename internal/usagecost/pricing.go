@@ -19,10 +19,22 @@ type Price struct {
 // They are public API list-price estimates; override them with model-pricing.json.
 var defaultPrices = map[string]Price{
 	// Claude 5.x. Cache write is the 5-minute rate (1.25x input).
-	"claude-fable":    {Input: 10, CacheRead: 0.25, CacheWrite: 12.5, Output: 50},
-	"claude-opus-5-5": {Input: 4, CacheRead: 0.2, CacheWrite: 5, Output: 20},
-	"claude-sonnet-5": {Input: 2, CacheRead: 0.2, CacheWrite: 2.5, Output: 10},
-	"claude-haiku-5":  {Input: 0.1, CacheRead: 0.01, CacheWrite: 0.125, Output: 0.5},
+	// Haiku 5.5 is the <=100K-token tier; prompts over 100K cost 5x and are not modeled.
+	"claude-fable":      {Input: 10, CacheRead: 0.25, CacheWrite: 12.5, Output: 50},
+	"claude-fable-5":    {Input: 10, CacheRead: 1, CacheWrite: 12.5, Output: 50},
+	"claude-fable-5-1":  {Input: 10, CacheRead: 0.25, CacheWrite: 12.5, Output: 50},
+	"claude-opus-5-5":   {Input: 4, CacheRead: 0.2, CacheWrite: 5, Output: 20},
+	"claude-sonnet-5":   {Input: 2, CacheRead: 0.2, CacheWrite: 2.5, Output: 10},
+	"claude-sonnet-5-5": {Input: 2, CacheRead: 0.1, CacheWrite: 2.5, Output: 10},
+	"claude-haiku-5":    {Input: 0.1, CacheRead: 0.01, CacheWrite: 0.125, Output: 0.5},
+	// GPT-6.x standard short-context (<=272K) rates; dots are written as dashes.
+	"gpt-6-astra":    {Input: 10, CacheRead: 1, Output: 50},
+	"gpt-6-1-sol":    {Input: 2, CacheRead: 0.1, Output: 10},
+	"gpt-6-1-terra":  {Input: 1, CacheRead: 0.05, Output: 5},
+	"gpt-6-luna":     {Input: 0.1, CacheRead: 0.01, Output: 0.5},
+	"gpt-6-sol":      {Input: 2, CacheRead: 0.2, Output: 10},
+	"gpt-6-cyber":    {Input: 20, CacheRead: 2, Output: 100},
+	"gpt-6-rosalind": {Input: 15, CacheRead: 1.5, Output: 75},
 	// Older generations; the family keys below cover 4.5+ Opus, 4.x Sonnet and 4.5 Haiku.
 	"claude-opus-4-1":    {Input: 15, CacheRead: 1.5, CacheWrite: 18.75, Output: 75},
 	"claude-opus-4-2025": {Input: 15, CacheRead: 1.5, CacheWrite: 18.75, Output: 75},
