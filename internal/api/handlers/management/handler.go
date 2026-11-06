@@ -68,6 +68,7 @@ type Handler struct {
 	quotaHistoryOnce        sync.Once
 	quotaHistoryStore       *quotahistory.Store
 	usageCost               *usagecost.Store
+	pluginLoginSaveMu       sync.Mutex
 }
 
 type configReloadSnapshot struct {

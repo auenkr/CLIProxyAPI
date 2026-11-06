@@ -299,6 +299,8 @@ func (b *Builder) Build() (*Service, error) {
 		defer service.cfgMu.RUnlock()
 		return service.cfg
 	}))
+	service.proxyPoolPublisher = helps.RegisterProxyPoolPublisher()
+	helps.AdvanceProxyPoolGeneration(service.proxyPoolPublisher, service.cfg)
 	if b.postAuthHook != nil {
 		service.serverOptions = append(service.serverOptions, api.WithPostAuthHook(b.postAuthHook))
 	}
