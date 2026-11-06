@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -612,7 +613,11 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 		}
 	}
 
-	body, err := json.Marshal(h.toClaudeError(msg))
+	claudeErr := h.toClaudeError(msg)
+	if status == http.StatusTooManyRequests {
+		annotateClaudeRateLimit(c.Writer.Header(), &claudeErr, time.Now())
+	}
+	body, err := json.Marshal(claudeErr)
 	if err != nil {
 		body = []byte(`{"type":"error","error":{"type":"api_error","message":"Internal Server Error"}}`)
 	}
@@ -622,6 +627,32 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 	}
 	c.Status(status)
 	_, _ = c.Writer.Write(body)
+}
+
+// annotateClaudeRateLimit exposes the cooldown to Claude clients in the forms they parse:
+// a "(reset after XhYmZs)" suffix in the message and the unified rate-limit headers.
+func annotateClaudeRateLimit(header http.Header, response *claudeErrorResponse, now time.Time) {
+	seconds, err := strconv.Atoi(strings.TrimSpace(header.Get("Retry-After")))
+	if err != nil || seconds <= 0 {
+		return
+	}
+	if !strings.Contains(response.Error.Message, "reset after") {
+		d := time.Duration(seconds) * time.Second
+		var text string
+		switch {
+		case d >= time.Hour:
+			text = fmt.Sprintf("%dh%dm%ds", int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60)
+		case d >= time.Minute:
+			text = fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+		default:
+			text = fmt.Sprintf("%ds", seconds)
+		}
+		response.Error.Message = fmt.Sprintf("%s (reset after %s)", response.Error.Message, text)
+	}
+	if header.Get("Anthropic-Ratelimit-Unified-Status") == "" {
+		header.Set("Anthropic-Ratelimit-Unified-Status", "rejected")
+		header.Set("Anthropic-Ratelimit-Unified-Reset", strconv.FormatInt(now.Add(time.Duration(seconds)*time.Second).Unix(), 10))
+	}
 }
 
 func claudeErrorText(err error) string {

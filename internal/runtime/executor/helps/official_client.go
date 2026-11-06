@@ -24,6 +24,8 @@ var officialClaudeEntrypoints = map[string]bool{
 	"claude-vscode": true,
 	"sdk-ts":        true,
 	"sdk-py":        true,
+	// T3 Code launches Claude Code with CLAUDE_CODE_ENTRYPOINT=t3-code.
+	"t3-code": true,
 }
 
 var geminiCLIUserAgent = regexp.MustCompile(`^GeminiCLI(?:-[a-zA-Z0-9-]+)?/[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.-]+)?(?:/|\s|$)`)
@@ -46,7 +48,10 @@ func NewOfficialClientVerifier(currentConfig func() *config.Config) cliproxyauth
 			countTokens := strings.HasSuffix(strings.TrimSpace(path), "/count_tokens")
 			return IsOfficialClaudeCodeRequest(headers, opts.OriginalRequest, countTokens, cfg)
 		case "codex":
-			return codexoptimize.IsCodexClientUserAgent(headerValue(headers, "User-Agent"))
+			userAgent := headerValue(headers, "User-Agent")
+			// T3 Code runs the Codex app-server with originator "T3 Code".
+			return codexoptimize.IsCodexClientUserAgent(userAgent) ||
+				strings.HasPrefix(strings.TrimSpace(userAgent), "T3 Code/")
 		case "gemini-cli":
 			return geminiCLIUserAgent.MatchString(strings.TrimSpace(headerValue(headers, "User-Agent")))
 		default:
