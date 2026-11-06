@@ -50,7 +50,7 @@ func NewPricer(overrides map[string]Price) *Pricer {
 		merged[key] = price
 	}
 	for key, price := range overrides {
-		if key = strings.ToLower(strings.TrimSpace(key)); key != "" {
+		if key = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(key)), ".", "-"); key != "" {
 			merged[key] = price
 		}
 	}
@@ -73,7 +73,8 @@ func (p *Pricer) Lookup(model string) (Price, bool) {
 	if p == nil {
 		return Price{}, false
 	}
-	model = strings.ToLower(strings.TrimSpace(model))
+	// Treat dotted versions (claude-opus-5.5) like dashed ones (claude-opus-5-5).
+	model = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(model)), ".", "-")
 	for _, entry := range p.entries {
 		if strings.Contains(model, entry.key) {
 			return entry.price, true
