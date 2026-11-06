@@ -18,11 +18,19 @@ type Price struct {
 // defaultPrices are matched by case-insensitive substring, longest key first.
 // They are public API list-price estimates; override them with model-pricing.json.
 var defaultPrices = map[string]Price{
-	"claude-opus":   {Input: 5, CacheRead: 0.5, CacheWrite: 6.25, Output: 25},
-	"claude-sonnet": {Input: 3, CacheRead: 0.3, CacheWrite: 3.75, Output: 15},
-	"claude-haiku":  {Input: 1, CacheRead: 0.1, CacheWrite: 1.25, Output: 5},
-	"gpt-":          {Input: 1.25, CacheRead: 0.125, Output: 10},
-	"gemini-":       {Input: 1.25, CacheRead: 0.31, Output: 10},
+	// Claude 5.x. Cache write is the 5-minute rate (1.25x input).
+	"claude-fable":    {Input: 10, CacheRead: 0.25, CacheWrite: 12.5, Output: 50},
+	"claude-opus-5-5": {Input: 4, CacheRead: 0.2, CacheWrite: 5, Output: 20},
+	"claude-sonnet-5": {Input: 2, CacheRead: 0.2, CacheWrite: 2.5, Output: 10},
+	"claude-haiku-5":  {Input: 0.1, CacheRead: 0.01, CacheWrite: 0.125, Output: 0.5},
+	// Older generations; the family keys below cover 4.5+ Opus, 4.x Sonnet and 4.5 Haiku.
+	"claude-opus-4-1":    {Input: 15, CacheRead: 1.5, CacheWrite: 18.75, Output: 75},
+	"claude-opus-4-2025": {Input: 15, CacheRead: 1.5, CacheWrite: 18.75, Output: 75},
+	"claude-opus":        {Input: 5, CacheRead: 0.5, CacheWrite: 6.25, Output: 25},
+	"claude-sonnet":      {Input: 3, CacheRead: 0.3, CacheWrite: 3.75, Output: 15},
+	"claude-haiku":       {Input: 1, CacheRead: 0.1, CacheWrite: 1.25, Output: 5},
+	"gpt-":               {Input: 1.25, CacheRead: 0.125, Output: 10},
+	"gemini-":            {Input: 1.25, CacheRead: 0.31, Output: 10},
 }
 
 // Pricer resolves a model name to a price.

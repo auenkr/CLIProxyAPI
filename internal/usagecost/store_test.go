@@ -33,8 +33,8 @@ func TestQueryPricesByModel(t *testing.T) {
 	if len(r.Models) != 3 || len(r.Hourly) != 1 {
 		t.Fatalf("models=%d hourly=%d", len(r.Models), len(r.Hourly))
 	}
-	// sonnet: 1*3 + 2*0.3 + 1*15 = 18.6
-	if got := r.Models[0].Costs.Total; math.Abs(got-18.6) > 1e-9 || r.Models[0].Model != "claude-sonnet-5-5" {
+	// sonnet 5.5: 1*2 + 2*0.2 + 1*10 = 12.4
+	if got := r.Models[0].Costs.Total; math.Abs(got-12.4) > 1e-9 || r.Models[0].Model != "claude-sonnet-5-5" {
 		t.Fatalf("sonnet cost = %v (%s)", got, r.Models[0].Model)
 	}
 	// custom: 1*2 + 1*4 = 6
