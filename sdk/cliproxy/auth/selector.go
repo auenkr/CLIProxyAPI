@@ -829,6 +829,38 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 	return available[0], nil
 }
 
+// SoonestResetSelector prefers the available auth whose quota window resets soonest, so
+// quota that would otherwise be lost at reset time is spent first. Auths without known
+// reset data are used (round-robin) only when no available auth has any.
+type SoonestResetSelector struct {
+	fallback RoundRobinSelector
+}
+
+// Pick selects the available auth with the earliest upcoming quota reset.
+func (s *SoonestResetSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	now := time.Now()
+	available, err := getSelectorAvailableAuths(ctx, auths, provider, model, now)
+	if err != nil {
+		return nil, err
+	}
+	available = preferCodexWebsocketAuths(ctx, provider, available)
+	var best *Auth
+	var bestAt time.Time
+	for _, candidate := range available {
+		at, ok := NextQuotaReset(candidate.ID, now)
+		if !ok {
+			continue
+		}
+		if best == nil || at.Before(bestAt) || (at.Equal(bestAt) && candidate.ID < best.ID) {
+			best, bestAt = candidate, at
+		}
+	}
+	if best != nil {
+		return best, nil
+	}
+	return s.fallback.Pick(ctx, provider, model, opts, available)
+}
+
 // IsAuthAvailableForModel reports whether auth is eligible for selection on model at now.
 func IsAuthAvailableForModel(auth *Auth, model string, now time.Time) bool {
 	blocked, _, _ := isAuthBlockedForModel(auth, model, now)

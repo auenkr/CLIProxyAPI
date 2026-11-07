@@ -187,7 +187,62 @@ func (h *Handler) collectCredentialQuota(ctx context.Context, auth *coreauth.Aut
 	if errDecode := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&payload); errDecode != nil {
 		return nil, errDecode
 	}
+	coreauth.SetQuotaResets(auth.ID, quotaPayloadResets(auth.Provider, payload))
 	return quotaPayloadSamples(auth.Provider, name, at, payload), nil
+}
+
+// quotaPayloadResets extracts upcoming reset instants per window from a usage payload.
+func quotaPayloadResets(provider string, payload map[string]any) map[string]time.Time {
+	resets := make(map[string]time.Time)
+	switch provider {
+	case "claude":
+		for key, window := range map[string]string{"five_hour": coreauth.QuotaWindowFiveHour, "seven_day": coreauth.QuotaWindowWeekly} {
+			data, _ := payload[key].(map[string]any)
+			if at, ok := quotaTime(data["resets_at"]); ok {
+				resets[window] = at
+			}
+		}
+	case "codex":
+		raw := payload["rate_limit"]
+		if raw == nil {
+			raw = payload["rateLimit"]
+		}
+		limits, _ := raw.(map[string]any)
+		for _, key := range []string{"primary_window", "secondary_window", "primaryWindow", "secondaryWindow"} {
+			data, _ := limits[key].(map[string]any)
+			seconds, ok := quotaNumber(data["limit_window_seconds"])
+			if !ok {
+				seconds, _ = quotaNumber(data["limitWindowSeconds"])
+			}
+			window := quotaWindow(fmt.Sprintf("%.0f", seconds))
+			if window == "" {
+				continue
+			}
+			if at, ok := quotaTime(data["reset_at"]); ok {
+				resets[window] = at
+			} else if after, ok := quotaNumber(data["reset_after_seconds"]); ok {
+				resets[window] = time.Now().Add(time.Duration(after) * time.Second)
+			}
+		}
+	}
+	return resets
+}
+
+// quotaTime parses an RFC3339 string or a unix timestamp in seconds or milliseconds.
+func quotaTime(value any) (time.Time, bool) {
+	if text, ok := value.(string); ok {
+		if at, errParse := time.Parse(time.RFC3339, strings.TrimSpace(text)); errParse == nil {
+			return at, true
+		}
+	}
+	number, ok := quotaNumber(value)
+	if !ok || number <= 0 {
+		return time.Time{}, false
+	}
+	if number > 1e11 {
+		return time.UnixMilli(int64(number)), true
+	}
+	return time.Unix(int64(number), 0), true
 }
 
 func quotaWindow(value string) string {
