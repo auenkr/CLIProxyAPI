@@ -148,7 +148,7 @@ func (s *Scheduler) handle(ctx context.Context, auth *coreauth.Auth, key string,
 	if end.After(now) {
 		// A window is running: look again when it ends, unless the anchor forbids a ping then.
 		next = s.planAt(entry, end, anchor)
-		entry.WithField("window_ends", end.Format(time.RFC3339)).Debug("window refresh: window running")
+		entry.WithField("window_ends", end.Format(time.RFC3339)).Info("window refresh: window running, next check at its end")
 		return
 	}
 	if !Allowed(anchor, now) {
