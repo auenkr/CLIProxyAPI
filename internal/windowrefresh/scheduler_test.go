@@ -84,6 +84,18 @@ func TestNoWindowPingsImmediatelyThenWaitsForReset(t *testing.T) {
 	}
 }
 
+func TestDisabledAuthStillGetsWindowRefresh(t *testing.T) {
+	h := newHarness("")
+	auth := &coreauth.Auth{ID: "disabled", FileName: "disabled.json", Provider: "claude", Disabled: true, Metadata: map[string]any{
+		MetadataKey: map[string]any{"enabled": true},
+	}}
+	h.s.List = func() []*coreauth.Auth { return []*coreauth.Auth{auth} }
+	h.tick()
+	if h.sent.Load() != 1 {
+		t.Fatalf("expected disabled auth to be refreshed, got %d pings", h.sent.Load())
+	}
+}
+
 func TestRunningWindowIsNotPinged(t *testing.T) {
 	h := newHarness("")
 	h.end = t0.Add(2 * time.Hour)

@@ -77,7 +77,7 @@ func (s *Scheduler) Tick(ctx context.Context) {
 	cfg := s.Config()
 	now := s.now()
 	for _, auth := range s.List() {
-		if auth == nil || auth.Disabled {
+		if auth == nil {
 			continue
 		}
 		account, _ := AccountSettings(auth)
