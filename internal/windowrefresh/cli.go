@@ -15,7 +15,13 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
-const pingPrompt = "Hi"
+const (
+	pingPrompt = "Hi"
+	// The cheapest models and lowest effort, so a ping uses as little quota as possible.
+	claudePingModel = "claude-haiku-5-5"
+	codexPingModel  = "gpt-6-luna"
+	pingEffort      = "low"
+)
 
 // DefaultSender routes each provider to its installed official CLI.
 func DefaultSender(ctx context.Context, auth *coreauth.Auth, cfg config.WindowRefreshConfig) error {
@@ -93,7 +99,7 @@ func sendClaude(ctx context.Context, auth *coreauth.Auth, cfg config.WindowRefre
 	}
 	// Remove the written credential afterwards; the dir keeps only the CLI's device identity.
 	defer func() { _ = os.Remove(credentialsPath) }()
-	return runCLI(ctx, auth, dir, binary, []string{"-p", pingPrompt, "--no-session-persistence"},
+	return runCLI(ctx, auth, dir, binary, claudePingArgs(),
 		[]string{"CLAUDE_CONFIG_DIR=" + dir}, access)
 }
 
@@ -122,7 +128,7 @@ func sendCodex(ctx context.Context, auth *coreauth.Auth, cfg config.WindowRefres
 	if errWrite := os.WriteFile(filepath.Join(home, "auth.json"), []byte(authJSON), 0o600); errWrite != nil {
 		return errWrite
 	}
-	return runCLI(ctx, auth, home, binary, []string{"exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", pingPrompt},
+	return runCLI(ctx, auth, home, binary, codexPingArgs(),
 		[]string{"CODEX_HOME=" + home}, access, idToken)
 }
 
@@ -148,4 +154,13 @@ func runCLI(ctx context.Context, auth *coreauth.Auth, home, binary string, args,
 		}
 	}
 	return fmt.Errorf("%s: %w: %s", auth.Provider, errRun, msg)
+}
+
+func claudePingArgs() []string {
+	return []string{"-p", pingPrompt, "--no-session-persistence", "--model", claudePingModel, "--effort", pingEffort}
+}
+
+func codexPingArgs() []string {
+	return []string{"exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
+		"-m", codexPingModel, "-c", `model_reasoning_effort="` + pingEffort + `"`, pingPrompt}
 }
