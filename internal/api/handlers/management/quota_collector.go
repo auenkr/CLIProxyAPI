@@ -115,6 +115,17 @@ func (h *Handler) collectCredentialQuota(ctx context.Context, auth *coreauth.Aut
 			return pluginSamples(quota), errProbe
 		}
 	}
+	payload, errPayload := h.fetchQuotaPayload(ctx, auth)
+	if errPayload != nil || payload == nil {
+		return nil, errPayload
+	}
+	coreauth.SetQuotaResets(auth.ID, quotaPayloadResets(auth.Provider, payload))
+	return quotaPayloadSamples(auth.Provider, name, at, payload), nil
+}
+
+// fetchQuotaPayload fetches the provider's usage document for a built-in OAuth credential.
+// It returns (nil, nil) for providers without a usage endpoint.
+func (h *Handler) fetchQuotaPayload(ctx context.Context, auth *coreauth.Auth) (map[string]any, error) {
 	url := ""
 	method := http.MethodGet
 	var body io.Reader
@@ -187,8 +198,22 @@ func (h *Handler) collectCredentialQuota(ctx context.Context, auth *coreauth.Aut
 	if errDecode := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&payload); errDecode != nil {
 		return nil, errDecode
 	}
-	coreauth.SetQuotaResets(auth.ID, quotaPayloadResets(auth.Provider, payload))
-	return quotaPayloadSamples(auth.Provider, name, at, payload), nil
+	return payload, nil
+}
+
+// FetchFiveHourReset polls the provider's usage and returns the end of the running 5-hour
+// window, or the zero time when no window is running.
+func (h *Handler) FetchFiveHourReset(ctx context.Context, auth *coreauth.Auth) (time.Time, error) {
+	payload, errPayload := h.fetchQuotaPayload(ctx, auth)
+	if errPayload != nil {
+		return time.Time{}, errPayload
+	}
+	if payload == nil {
+		return time.Time{}, fmt.Errorf("window refresh: no usage endpoint for provider %s", auth.Provider)
+	}
+	resets := quotaPayloadResets(auth.Provider, payload)
+	coreauth.SetQuotaResets(auth.ID, resets)
+	return resets[coreauth.QuotaWindowFiveHour], nil
 }
 
 // quotaPayloadResets extracts upcoming reset instants per window from a usage payload.
