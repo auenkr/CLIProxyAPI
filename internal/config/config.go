@@ -220,6 +220,9 @@ type Config struct {
 	// OAuthSettings defines per-channel model settings (such as max-context-length) applied to OAuth/file-backed auth entries.
 	OAuthSettings map[string][]OAuthModelSetting `yaml:"oauth-settings,omitempty" json:"oauth-settings,omitempty"`
 
+	// WindowRefresh configures automatic "Hi" pings that start a new 5-hour quota window.
+	WindowRefresh WindowRefreshConfig `yaml:"window-refresh,omitempty" json:"window-refresh,omitempty"`
+
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 }

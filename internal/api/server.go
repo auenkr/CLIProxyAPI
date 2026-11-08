@@ -318,6 +318,7 @@ func (s *Server) Start() error {
 		s.quotaCollectorCancel = cancel
 		s.listenerMu.Unlock()
 		s.mgmt.StartQuotaCollector(ctx)
+		s.mgmt.StartWindowRefresh(ctx)
 		if s.usageCost != nil {
 			go s.usageCost.Run(ctx)
 		}
