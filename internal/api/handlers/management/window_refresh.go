@@ -30,7 +30,8 @@ func (h *Handler) StartWindowRefresh(ctx context.Context) {
 			}
 			return config.WindowRefreshConfig{}
 		},
-		Send: windowrefresh.DefaultSender,
+		Usage: h.FetchFiveHourReset,
+		Send:  windowrefresh.DefaultSender,
 	}
 	go scheduler.Run(ctx)
 }

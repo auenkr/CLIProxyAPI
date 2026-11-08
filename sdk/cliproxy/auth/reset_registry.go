@@ -12,25 +12,17 @@ const (
 )
 
 var quotaResets = struct {
-	mu     sync.RWMutex
-	data   map[string]map[string]time.Time
-	polled map[string]time.Time
-}{data: make(map[string]map[string]time.Time), polled: make(map[string]time.Time)}
+	mu   sync.RWMutex
+	data map[string]map[string]time.Time
+}{data: make(map[string]map[string]time.Time)}
 
 // SetQuotaResets records the known quota reset instants for an auth, replacing earlier data.
 func SetQuotaResets(authID string, resets map[string]time.Time) {
-	SetQuotaResetsAt(authID, resets, time.Now())
-}
-
-// SetQuotaResetsAt is SetQuotaResets with an explicit poll time. An empty resets map with a
-// poll time means the provider was polled and reported no active window.
-func SetQuotaResetsAt(authID string, resets map[string]time.Time, polledAt time.Time) {
 	if authID == "" {
 		return
 	}
 	quotaResets.mu.Lock()
 	defer quotaResets.mu.Unlock()
-	quotaResets.polled[authID] = polledAt
 	if len(resets) == 0 {
 		delete(quotaResets.data, authID)
 		return
@@ -40,22 +32,6 @@ func SetQuotaResetsAt(authID string, resets map[string]time.Time, polledAt time.
 		copied[window] = at
 	}
 	quotaResets.data[authID] = copied
-}
-
-// QuotaPolledAt returns when the provider's quota was last polled successfully for an auth.
-func QuotaPolledAt(authID string) (time.Time, bool) {
-	quotaResets.mu.RLock()
-	defer quotaResets.mu.RUnlock()
-	at, ok := quotaResets.polled[authID]
-	return at, ok
-}
-
-// QuotaResetAt returns the recorded reset instant of one window for an auth.
-func QuotaResetAt(authID, window string) (time.Time, bool) {
-	quotaResets.mu.RLock()
-	defer quotaResets.mu.RUnlock()
-	at, ok := quotaResets.data[authID][window]
-	return at, ok
 }
 
 // NextQuotaReset returns the soonest upcoming reset for an auth. The weekly window wins
