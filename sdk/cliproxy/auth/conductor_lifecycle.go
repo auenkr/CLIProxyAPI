@@ -663,6 +663,7 @@ func (m *Manager) RemoveIf(ctx context.Context, id string, predicate func(*Auth)
 	}
 	provider := strings.TrimSpace(existing.Provider)
 	delete(m.auths, id)
+	SetQuotaResets(id, nil)
 	m.notifyAuthChangeLocked(id)
 	if m.modelPoolOffsets != nil {
 		delete(m.modelPoolOffsets, id)

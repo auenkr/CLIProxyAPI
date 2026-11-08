@@ -104,6 +104,7 @@ func (h *Handler) collectCredentialQuota(ctx context.Context, auth *coreauth.Aut
 			if errFetch != nil {
 				return nil, errFetch
 			}
+			recordPluginQuotaResets(auth.ID, quota)
 			return pluginSamples(quota), nil
 		}
 	}
@@ -112,6 +113,9 @@ func (h *Handler) collectCredentialQuota(ctx context.Context, auth *coreauth.Aut
 		c.Request = (&http.Request{}).WithContext(ctx)
 		quota, handled, errProbe := h.executeQuotaProbe(c, auth, probe)
 		if handled {
+			if errProbe == nil {
+				recordPluginQuotaResets(auth.ID, quota)
+			}
 			return pluginSamples(quota), errProbe
 		}
 	}
@@ -269,13 +273,41 @@ func quotaPayloadResets(provider string, payload map[string]any) map[string]time
 				seconds, _ = quotaNumber(data["limitWindowSeconds"])
 			}
 			window := quotaWindow(fmt.Sprintf("%.0f", seconds))
-			if window == "" {
+			if window == "" || (window == coreauth.QuotaWindowFiveHour && codexFiveHourUnused(payload)) {
 				continue
 			}
-			if at, ok := quotaTime(data["reset_at"]); ok {
+			resetAt := data["reset_at"]
+			if resetAt == nil {
+				resetAt = data["resetAt"]
+			}
+			resetAfter := data["reset_after_seconds"]
+			if resetAfter == nil {
+				resetAfter = data["resetAfterSeconds"]
+			}
+			if at, ok := quotaTime(resetAt); ok {
 				resets[window] = at
-			} else if after, ok := quotaNumber(data["reset_after_seconds"]); ok {
+			} else if after, ok := quotaNumber(resetAfter); ok {
 				resets[window] = time.Now().Add(time.Duration(after) * time.Second)
+			}
+		}
+	case "antigravity":
+		groups, _ := payload["groups"].([]any)
+		for _, rawGroup := range groups {
+			group, _ := rawGroup.(map[string]any)
+			buckets, _ := group["buckets"].([]any)
+			for _, rawBucket := range buckets {
+				bucket, _ := rawBucket.(map[string]any)
+				windowValue, _ := bucket["window"].(string)
+				window := quotaWindow(windowValue)
+				rawTime := bucket["resetTime"]
+				if rawTime == nil {
+					rawTime = bucket["reset_time"]
+				}
+				if at, ok := quotaTime(rawTime); ok && window != "" {
+					if old, exists := resets[window]; !exists || at.Before(old) {
+						resets[window] = at
+					}
+				}
 			}
 		}
 	}
@@ -376,5 +408,23 @@ func quotaNumber(value any) (float64, bool) {
 		return number, errParse == nil
 	default:
 		return 0, false
+	}
+}
+
+// recordPluginQuotaResets preserves the last usable observation on malformed responses.
+func recordPluginQuotaResets(authID string, quota pluginapi.QuotaFetchResponse) {
+	resets := make(map[string]time.Time)
+	for _, group := range quota.Groups {
+		for _, bucket := range group.Buckets {
+			window := quotaWindow(bucket.Window)
+			if at, ok := quotaTime(bucket.ResetTime); ok && window != "" {
+				if old, exists := resets[window]; !exists || at.Before(old) {
+					resets[window] = at
+				}
+			}
+		}
+	}
+	if len(resets) > 0 {
+		coreauth.SetQuotaResets(authID, resets)
 	}
 }

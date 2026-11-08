@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -37,7 +38,7 @@ func TestQuotaPayloadSamples(t *testing.T) {
 
 func TestQuotaCollectorRecordsWithoutUI(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"groups":[{"displayName":"main","buckets":[{"window":"5h","remainingFraction":0.8}]}]}`))
+		_, _ = w.Write([]byte(`{"groups":[{"displayName":"main","buckets":[{"window":"5h","remainingFraction":0.8,"resetTime":"2099-01-01T00:00:00Z"}]}]}`))
 	}))
 	defer upstream.Close()
 	manager := coreauth.NewManager(nil, nil, nil)
@@ -51,6 +52,10 @@ func TestQuotaCollectorRecordsWithoutUI(t *testing.T) {
 	}
 	h := NewHandler(&config.Config{}, "", manager)
 	h.collectQuota(context.Background())
+	t.Cleanup(func() { coreauth.SetQuotaResets("a", nil) })
+	if _, ok := coreauth.NextQuotaReset("a", time.Now()); !ok {
+		t.Fatal("probe reset data not recorded")
+	}
 	if got := h.quotaHistory().Since(0); len(got) != 1 || got[0].Remaining != 80 || got[0].Provider != "plugin" || !strings.HasPrefix(got[0].Name, "a.json\x00") {
 		t.Fatalf("background collection = %+v", got)
 	}

@@ -177,7 +177,9 @@ routing:
   strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, soonest-reset
   # soonest-reset prefers the credential whose quota window (weekly, else 5h) resets soonest,
   # using reset times polled by the quota collector. Credentials with unknown reset times are
-  # used round-robin only when no candidate has one.
+  # used round-robin only when no candidate has one. Startup falls back until the first poll.
+  # Built-in reset data: Claude, Codex, Antigravity; plugins/probes must report window/resetTime.
+  # Other providers fall back to round-robin. Priority and session affinity still apply.
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).
   # Non-positive weights exclude the credential while this strategy is active.
   # For OAuth/file credentials, add a top-level numeric "weight" field to the auth JSON.
