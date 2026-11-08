@@ -122,3 +122,22 @@ func TestAnchorAllowsEarlyPing(t *testing.T) {
 		t.Fatalf("expected ping before X-5h, got %d", h.sent.Load())
 	}
 }
+
+func TestUnconfirmedWindowBacksOffAfterPing(t *testing.T) {
+	h := newHarness("")
+	h.s.Send = func(context.Context, *coreauth.Auth, config.WindowRefreshConfig) error {
+		h.sent.Add(1) // provider keeps reporting no window (e.g. Codex still at 0%)
+		return nil
+	}
+	h.tick()
+	h.now = h.now.Add(retryAfter + time.Minute)
+	h.tick()
+	if h.sent.Load() != 1 {
+		t.Fatalf("pinged again inside the back-off: %d", h.sent.Load())
+	}
+	h.now = h.now.Add(unconfirmedBackoff)
+	h.tick()
+	if h.sent.Load() != 2 {
+		t.Fatalf("expected retry after the back-off, got %d", h.sent.Load())
+	}
+}

@@ -20,6 +20,9 @@ const (
 	tickInterval = 30 * time.Second
 	// retryAfter is the wait after a failed usage fetch, ping, or a ping that did not start a window.
 	retryAfter = 5 * time.Minute
+	// unconfirmedBackoff is the wait after a ping whose window the provider does not report yet
+	// (usage can still read 0%), so the account is not pinged repeatedly.
+	unconfirmedBackoff = 30 * time.Minute
 )
 
 // MetadataKey is the auth metadata key holding an account's settings, so they are stored with
@@ -168,6 +171,7 @@ func (s *Scheduler) handle(ctx context.Context, auth *coreauth.Auth, key string,
 	now = s.now()
 	if errUsage != nil || !end.After(now) {
 		entry.Warn("window refresh: ping sent but no 5-hour window is reported yet")
+		next = now.Add(unconfirmedBackoff)
 		return
 	}
 	next = s.planAt(entry, end, anchor)
