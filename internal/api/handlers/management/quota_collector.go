@@ -213,7 +213,36 @@ func (h *Handler) FetchFiveHourReset(ctx context.Context, auth *coreauth.Auth) (
 	}
 	resets := quotaPayloadResets(auth.Provider, payload)
 	coreauth.SetQuotaResets(auth.ID, resets)
+	if auth.Provider == "codex" && codexFiveHourUnused(payload) {
+		// Codex reports a rolling reset time even before a window starts; 0% used means idle.
+		return time.Time{}, nil
+	}
 	return resets[coreauth.QuotaWindowFiveHour], nil
+}
+
+// codexFiveHourUnused reports whether the Codex 5-hour window has no usage yet (not started).
+func codexFiveHourUnused(payload map[string]any) bool {
+	raw := payload["rate_limit"]
+	if raw == nil {
+		raw = payload["rateLimit"]
+	}
+	limits, _ := raw.(map[string]any)
+	for _, key := range []string{"primary_window", "secondary_window", "primaryWindow", "secondaryWindow"} {
+		data, _ := limits[key].(map[string]any)
+		seconds, ok := quotaNumber(data["limit_window_seconds"])
+		if !ok {
+			seconds, _ = quotaNumber(data["limitWindowSeconds"])
+		}
+		if quotaWindow(fmt.Sprintf("%.0f", seconds)) != coreauth.QuotaWindowFiveHour {
+			continue
+		}
+		used, ok := quotaNumber(data["used_percent"])
+		if !ok {
+			used, ok = quotaNumber(data["usedPercent"])
+		}
+		return ok && used <= 0
+	}
+	return false
 }
 
 // quotaPayloadResets extracts upcoming reset instants per window from a usage payload.
