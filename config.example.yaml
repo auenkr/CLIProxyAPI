@@ -1365,3 +1365,9 @@ plugins:
 #     switch-project: true
 #     switch-preview-model: true
 # antigravity-credits moved to oauth.providers.antigravity.antigravity-credits.
+
+# Send a "Hi" through the installed official CLI (claude, codex) when an account's 5-hour window resets.
+# window-refresh:
+#   claude-binary-path: claude  # default: "claude" from PATH
+#   codex-binary-path: codex    # default: "codex" from PATH
+#   # Per-account enabled/anchor are saved on each auth record (Postgres/file store) via the UI/API.
