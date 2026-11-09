@@ -154,3 +154,16 @@ func TestOfficialClientVerifierRejectsUnknownProvider(t *testing.T) {
 		t.Fatal("unsupported provider must never verify")
 	}
 }
+
+func TestIsOfficialClaudeCodeRequestAcceptsDesktopApp(t *testing.T) {
+	for _, entrypoint := range []string{"claude-desktop", "claude-desktop-3p", "local-agent"} {
+		headers := http.Header{"User-Agent": []string{"claude-cli/2.1.230 (external, " + entrypoint + ")"}}
+		if !IsOfficialClaudeCodeRequest(headers, []byte(`{}`), false, nil) {
+			t.Fatalf("entrypoint %q should be accepted", entrypoint)
+		}
+	}
+	headers := http.Header{"User-Agent": []string{"curl/8.0"}}
+	if IsOfficialClaudeCodeRequest(headers, []byte(`{}`), false, nil) {
+		t.Fatal("non-Claude user agent must be rejected")
+	}
+}

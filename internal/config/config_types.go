@@ -423,6 +423,18 @@ type PprofConfig struct {
 	Addr string `yaml:"addr" json:"addr"`
 }
 
+// TinybirdConfig controls asynchronous capture of every request into Tinybird (ClickHouse).
+type TinybirdConfig struct {
+	// Enable toggles request capture. When false nothing is sent.
+	Enable bool `yaml:"enable" json:"-"`
+	// Host is the Tinybird API host, for example https://api.ap-east-1.aws.tinybird.co.
+	Host string `yaml:"host" json:"-"`
+	// Token is a Tinybird token allowed to append to the data source.
+	Token string `yaml:"token" json:"-"`
+	// Datasource is the target data source name. Defaults to proxy_requests.
+	Datasource string `yaml:"datasource" json:"-"`
+}
+
 // DiscoveryInterfacesConfig specifies interface inclusion and exclusion rules.
 type DiscoveryInterfacesConfig struct {
 	Include []string `yaml:"include" json:"include"`

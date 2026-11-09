@@ -63,6 +63,9 @@ type Config struct {
 	// Pprof config controls the optional pprof HTTP debug server.
 	Pprof PprofConfig `yaml:"pprof" json:"pprof"`
 
+	// Tinybird controls asynchronous request capture into Tinybird (ClickHouse).
+	Tinybird TinybirdConfig `yaml:"tinybird" json:"-"`
+
 	// Discovery configures local network mDNS / DNS-SD service advertising.
 	Discovery DiscoveryConfig `yaml:"discovery" json:"discovery"`
 

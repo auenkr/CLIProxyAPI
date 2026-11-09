@@ -116,7 +116,7 @@ func buildV8Paths() []configPath {
 		{"error-logs-max-files", "observability.logs.error-logs-max-files"},
 		{"usage-statistics-enabled", "observability.usage.usage-statistics-enabled"},
 		{"quota-history-retention-days", "observability.quota.retention-days"},
-		{"redis-usage-queue-retention-seconds", "observability.usage.redis-usage-queue-retention-seconds"}, {"pprof", "observability.pprof"},
+		{"redis-usage-queue-retention-seconds", "observability.usage.redis-usage-queue-retention-seconds"}, {"pprof", "observability.pprof"}, {"tinybird", "observability.tinybird"},
 	}
 	var out []configPath
 	var walk func(reflect.Type, string, []int)

@@ -1265,6 +1265,15 @@ observability:
     # Nonpositive values use the default of 14 days.
     retention-days: 14
 
+  # Capture every request (headers except credentials, plus body) into Tinybird/ClickHouse
+  # asynchronously. Authorization, X-Api-Key, X-Goog-Api-Key and Cookie values are redacted.
+  # Management requests are excluded. Changes need a restart.
+  tinybird:
+    enable: false
+    host: "https://api.ap-east-1.aws.tinybird.co"
+    token: ""
+    datasource: "proxy_requests"
+
   usage:
     # When false, disable in-memory usage statistics aggregation
     usage-statistics-enabled: false
