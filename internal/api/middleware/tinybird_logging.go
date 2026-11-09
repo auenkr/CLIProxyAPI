@@ -52,6 +52,9 @@ func TinybirdLoggingMiddleware(sink *tinybirdlog.Sink) gin.HandlerFunc {
 			c.Request.Body = replayedBody{Reader: replay, Closer: original}
 		}
 
+		capture := &responseCapture{ResponseWriter: c.Writer}
+		c.Writer = capture
+
 		c.Next()
 
 		event := &tinybirdlog.Event{
@@ -66,6 +69,11 @@ func TinybirdLoggingMiddleware(sink *tinybirdlog.Sink) gin.HandlerFunc {
 			UserAgent:      c.Request.UserAgent(),
 			RequestHeaders: c.Request.Header.Clone(),
 		}
+		event.ResponseHeaders = c.Writer.Header().Clone()
+		responseRaw := capture.body.Bytes()
+		event.ResponseBodySize = capture.total
+		event.ResponseBodyTrunc = capture.truncated
+		responseEncoding := strings.TrimSpace(event.ResponseHeaders.Get("Content-Encoding"))
 		event.RequestBodySize = int64(len(raw))
 		event.RequestBodyTrunc = truncated
 		if truncated && c.Request.ContentLength > 0 {
@@ -82,10 +90,57 @@ func TinybirdLoggingMiddleware(sink *tinybirdlog.Sink) gin.HandlerFunc {
 				}
 				event.RequestBody = decoded
 			}
+			if len(responseRaw) > 0 {
+				decoded := decodeCapturedRequestBodyForLogWithLimit(responseRaw, responseEncoding, tinybirdMaxBodyBytes)
+				if len(decoded) > tinybirdMaxBodyBytes {
+					decoded = decoded[:tinybirdMaxBodyBytes]
+					event.ResponseBodyTrunc = true
+				}
+				event.ResponseBody = decoded
+			}
 			sink.Enqueue(event.Encode())
 		})
 	}
 }
+
+// responseCapture copies the leading bytes written to the client without altering the
+// response. It embeds gin.ResponseWriter so Flush, Hijack and the other optional
+// interfaces keep working for streaming and websocket handlers.
+type responseCapture struct {
+	gin.ResponseWriter
+	body      bytes.Buffer
+	total     int64
+	truncated bool
+}
+
+func (w *responseCapture) record(data []byte) {
+	w.total += int64(len(data))
+	room := tinybirdMaxBodyBytes - w.body.Len()
+	if room <= 0 {
+		w.truncated = w.truncated || len(data) > 0
+		return
+	}
+	if len(data) > room {
+		data = data[:room]
+		w.truncated = true
+	}
+	w.body.Write(data)
+}
+
+func (w *responseCapture) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	w.record(data[:n])
+	return n, err
+}
+
+func (w *responseCapture) WriteString(data string) (int, error) {
+	n, err := w.ResponseWriter.WriteString(data)
+	w.record([]byte(data[:n]))
+	return n, err
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (w *responseCapture) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // replayedBody serves the pre-read bytes followed by the rest of the original body.
 type replayedBody struct {

@@ -38,6 +38,11 @@ type Event struct {
 	RequestBody      []byte
 	RequestBodySize  int64
 	RequestBodyTrunc bool
+
+	ResponseHeaders   http.Header
+	ResponseBody      []byte
+	ResponseBodySize  int64
+	ResponseBodyTrunc bool
 }
 
 // Encode renders the event as one NDJSON line matching the proxy_requests schema.
@@ -60,6 +65,14 @@ func (e *Event) Encode() []byte {
 		truncated = 1
 	}
 	_ = doc.Set("request_body_truncated", truncated)
+	_ = doc.Set("response_headers", HeadersJSON(e.ResponseHeaders))
+	_ = doc.Set("response_body", strings.ToValidUTF8(string(e.ResponseBody), "�"))
+	_ = doc.Set("response_body_bytes", e.ResponseBodySize)
+	responseTruncated := 0
+	if e.ResponseBodyTrunc {
+		responseTruncated = 1
+	}
+	_ = doc.Set("response_body_truncated", responseTruncated)
 	return doc.Bytes()
 }
 

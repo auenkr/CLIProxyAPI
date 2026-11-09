@@ -47,7 +47,9 @@ func TestTinybirdLoggingCapturesRequestAndRedactsCredentials(t *testing.T) {
 	router.POST("/v1/messages", func(c *gin.Context) {
 		data, _ := io.ReadAll(c.Request.Body)
 		handlerSaw = string(data)
-		c.String(http.StatusOK, "ok")
+		c.Header("X-Reply", "hello")
+		c.Header("Set-Cookie", "sid=secret-cookie")
+		c.String(http.StatusOK, "ok-response-body")
 	})
 	router.POST("/v0/management/x", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
@@ -81,6 +83,15 @@ func TestTinybirdLoggingCapturesRequestAndRedactsCredentials(t *testing.T) {
 	}
 	if got := ojson.Get(line, "status").Int(); got != 200 {
 		t.Fatalf("status = %d", got)
+	}
+	if got := ojson.Get(line, "response_body").String(); got != "ok-response-body" {
+		t.Fatalf("response_body = %q", got)
+	}
+	if got := ojson.Get(ojson.Get(line, "response_headers").String(), "X-Reply.0").String(); got != "hello" {
+		t.Fatalf("response X-Reply = %q", got)
+	}
+	if strings.Contains(line, "secret-cookie") {
+		t.Fatalf("response cookie leaked: %s", line)
 	}
 }
 
