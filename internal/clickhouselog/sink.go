@@ -4,9 +4,13 @@
 package clickhouselog
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +55,14 @@ type Sink struct {
 // New builds a started Sink from configuration. It returns nil when capture is
 // disabled, host or token is missing, or the client cannot be created.
 func New(cfg config.ClickHouseConfig) *Sink {
+	if ingestURL := strings.TrimSpace(cfg.IngestURL); cfg.Enable && ingestURL != "" {
+		token := strings.TrimSpace(cfg.IngestToken)
+		if token == "" {
+			return nil
+		}
+		log.Infof("clickhouse request logging enabled: http ingest endpoint=%s", ingestURL)
+		return NewWithInserter(httpInserter(ingestURL, token, &http.Client{}))
+	}
 	token := strings.TrimSpace(cfg.Token)
 	host := strings.TrimSpace(cfg.Host)
 	if !cfg.Enable || token == "" || host == "" {
@@ -111,6 +123,43 @@ func NewWithInserter(insert Inserter) *Sink {
 	}
 	go s.run()
 	return s
+}
+
+// httpInserter posts batches as gzipped NDJSON with a bearer token.
+func httpInserter(endpoint, token string, client *http.Client) Inserter {
+	return func(ctx context.Context, events []*Event) error {
+		var body bytes.Buffer
+		gz := gzip.NewWriter(&body)
+		for _, e := range events {
+			if _, err := gz.Write(append(e.Encode(), '\n')); err != nil {
+				return fmt.Errorf("compress batch: %w", err)
+			}
+		}
+		if err := gz.Close(); err != nil {
+			return fmt.Errorf("compress batch: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/x-ndjson")
+		req.Header.Set("Content-Encoding", "gzip")
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if errClose := resp.Body.Close(); errClose != nil {
+				log.WithError(errClose).Debug("clickhouse request logging: close response body")
+			}
+		}()
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("ingest returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		}
+		return nil
+	}
 }
 
 // sdkInserter inserts batches with the official client's batch API.

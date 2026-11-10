@@ -441,6 +441,12 @@ type ClickHouseConfig struct {
 	Database string `yaml:"database" json:"-"`
 	// Table is the target table name. Defaults to proxy_requests.
 	Table string `yaml:"table" json:"-"`
+	// IngestURL optionally sends rows as gzipped NDJSON over HTTP to this endpoint instead of
+	// using the ClickHouse client. Use it when the ClickHouse interface is read-only. When
+	// set, Host and Token are not needed for writing.
+	IngestURL string `yaml:"ingest-url" json:"-"`
+	// IngestToken is sent as a bearer token to IngestURL.
+	IngestToken string `yaml:"ingest-token" json:"-"`
 }
 
 // DiscoveryInterfacesConfig specifies interface inclusion and exclusion rules.

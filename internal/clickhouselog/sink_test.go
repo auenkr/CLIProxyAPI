@@ -1,9 +1,12 @@
 package clickhouselog
 
 import (
+	"bufio"
+	"compress/gzip"
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -121,4 +124,58 @@ func TestNilSinkIsSafe(t *testing.T) {
 	var sink *Sink
 	sink.Enqueue(&Event{})
 	sink.Close(context.Background())
+}
+
+func TestHTTPIngestPostsGzippedNDJSON(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	var auth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip: %v", err)
+			return
+		}
+		scanner := bufio.NewScanner(zr)
+		scanner.Buffer(make([]byte, 1<<20), 1<<24)
+		mu.Lock()
+		defer mu.Unlock()
+		auth = r.Header.Get("Authorization")
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	sink := New(config.ClickHouseConfig{Enable: true, IngestURL: server.URL, IngestToken: "tok"})
+	if sink == nil {
+		t.Fatal("sink not created for ingest url")
+	}
+	sink.Enqueue(&Event{Method: "POST", Path: "/v1/messages", Status: 200, RequestBody: []byte(`{"a":"b"}`)})
+	sink.Close(context.Background())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if auth != "Bearer tok" {
+		t.Fatalf("Authorization = %q", auth)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want 1", len(lines))
+	}
+	if got := ojson.Get(lines[0], "request_body").String(); got != `{"a":"b"}` {
+		t.Fatalf("request_body = %q", got)
+	}
+	if got := ojson.Get(lines[0], "status").Int(); got != 200 {
+		t.Fatalf("status = %d", got)
+	}
+	if got := ojson.Get(lines[0], "timestamp").String(); got == "" {
+		t.Fatal("timestamp missing")
+	}
+}
+
+func TestHTTPIngestNeedsToken(t *testing.T) {
+	if New(config.ClickHouseConfig{Enable: true, IngestURL: "https://example.test"}) != nil {
+		t.Fatal("sink created without ingest token")
+	}
 }

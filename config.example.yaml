@@ -1277,6 +1277,10 @@ observability:
     token: ""           # password or token, sent as X-ClickHouse-Key
     database: ""        # optional; empty uses the user's default database
     table: "proxy_requests"
+    # Optional: send rows as gzipped NDJSON over HTTP instead of the ClickHouse client.
+    # Needed when the ClickHouse interface is read-only. The token is sent as a bearer token.
+    ingest-url: ""
+    ingest-token: ""
 
   usage:
     # When false, disable in-memory usage statistics aggregation

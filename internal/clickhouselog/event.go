@@ -138,3 +138,13 @@ func (e *Event) row() []any {
 func (e *Event) size() int64 {
 	return int64(len(e.RequestBody)+len(e.ResponseBody)+len(e.Path)+len(e.Query)+len(e.UserAgent)) + 1024
 }
+
+// Encode renders the event as one NDJSON line matching the table columns.
+func (e *Event) Encode() []byte {
+	doc := ojson.NewDocString("{}")
+	_ = doc.Set("timestamp", e.Timestamp.UTC().Format("2006-01-02 15:04:05.000"))
+	for i, value := range e.row()[1:] {
+		_ = doc.Set(columns[i+1], value)
+	}
+	return doc.Bytes()
+}
