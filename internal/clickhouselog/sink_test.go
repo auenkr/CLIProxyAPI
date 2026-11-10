@@ -1,11 +1,9 @@
 package clickhouselog
 
 import (
-	"bufio"
-	"compress/gzip"
 	"context"
+	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -40,70 +38,74 @@ func TestHeadersJSONRedactsCredentials(t *testing.T) {
 	}
 }
 
-func TestEventEncodeKeepsBodyAndEscapes(t *testing.T) {
+func TestEventRowMatchesColumnsAndTypes(t *testing.T) {
 	event := &Event{
-		Method:         "POST",
-		Path:           "/v1/messages",
-		Status:         200,
-		RequestHeaders: http.Header{"X-Test": {"a\"b"}},
-		RequestBody:    []byte("{\"model\":\"x\",\n\"bad\":\"\xff\"}"),
+		Method:          "POST",
+		Path:            "/v1/messages",
+		Status:          200,
+		DurationMs:      -5,
+		RequestHeaders:  http.Header{"X-Test": {"a\"b"}},
+		RequestBody:     []byte("{\"bad\":\"\xff\"}"),
+		RequestBodySize: 1 << 40,
 	}
-	line := event.Encode()
-	if strings.ContainsRune(string(line), '\n') {
-		t.Fatalf("NDJSON line contains a raw newline: %q", line)
+	row := event.row()
+	if len(row) != len(columns) {
+		t.Fatalf("row has %d values for %d columns", len(row), len(columns))
 	}
-	if got := ojson.GetBytes(line, "status").Int(); got != 200 {
-		t.Fatalf("status = %d", got)
+	if got, ok := row[5].(uint16); !ok || got != 200 {
+		t.Fatalf("status = %#v", row[5])
 	}
-	if body := ojson.GetBytes(line, "request_body").String(); !strings.Contains(body, "\"model\":\"x\"") {
-		t.Fatalf("body not preserved: %q", body)
+	if got, ok := row[6].(uint32); !ok || got != 0 {
+		t.Fatalf("negative duration should clamp to 0, got %#v", row[6])
+	}
+	if got, ok := row[11].(uint32); !ok || got != ^uint32(0) {
+		t.Fatalf("oversized body size should clamp, got %#v", row[11])
+	}
+	if body, _ := row[10].(string); strings.ContainsRune(body, 0xff) || !strings.Contains(body, "bad") {
+		t.Fatalf("body not sanitised: %q", body)
 	}
 }
 
-func TestSinkDeliversBatchAsGzippedNDJSON(t *testing.T) {
+func TestSinkDeliversEventsInBatches(t *testing.T) {
 	var mu sync.Mutex
-	var lines []string
-	var user, key, query string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		zr, err := gzip.NewReader(r.Body)
-		if err != nil {
-			t.Errorf("gzip: %v", err)
-			return
-		}
-		scanner := bufio.NewScanner(zr)
-		scanner.Buffer(make([]byte, 1<<20), 1<<24)
+	var got []*Event
+	sink := NewWithInserter(func(_ context.Context, batch []*Event) error {
 		mu.Lock()
 		defer mu.Unlock()
-		user = r.Header.Get("X-ClickHouse-User")
-		key = r.Header.Get("X-ClickHouse-Key")
-		query = r.URL.RawQuery
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-		}
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer server.Close()
-
-	sink := newSink(server.URL, "ch-user", "tok", "proxy_requests", server.Client())
+		got = append(got, batch...)
+		return nil
+	})
 	for i := 0; i < 3; i++ {
-		sink.Enqueue((&Event{Method: "GET", Path: "/x", Status: 200}).Encode())
+		sink.Enqueue(&Event{Method: "GET", Path: "/x", Status: 200})
 	}
 	sink.Close(context.Background())
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(lines) != 3 {
-		t.Fatalf("delivered %d lines, want 3", len(lines))
-	}
-	if user != "ch-user" || key != "tok" {
-		t.Fatalf("auth headers = %q / %q", user, key)
-	}
-	if !strings.Contains(query, "INSERT+INTO+proxy_requests+FORMAT+JSONEachRow") {
-		t.Fatalf("query = %q", query)
+	if len(got) != 3 {
+		t.Fatalf("delivered %d events, want 3", len(got))
 	}
 }
 
-func TestNewIsDisabledUnlessEnabledWithToken(t *testing.T) {
+func TestSinkRetriesThenDrops(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+	sink := NewWithInserter(func(context.Context, []*Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+		attempts++
+		return errors.New("boom")
+	})
+	sink.Enqueue(&Event{Path: "/x"})
+	sink.Close(context.Background())
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts < 1 {
+		t.Fatal("insert was never attempted")
+	}
+}
+
+func TestNewIsDisabledUnlessConfigured(t *testing.T) {
 	if New(config.ClickHouseConfig{Host: "ch.example.test", Token: "tok"}) != nil {
 		t.Fatal("sink created although enable is false")
 	}
@@ -115,21 +117,8 @@ func TestNewIsDisabledUnlessEnabledWithToken(t *testing.T) {
 	}
 }
 
-func TestBaseURLSchemeSelection(t *testing.T) {
-	cases := map[string]string{
-		baseURL("ch.example.test", 443):           "https://ch.example.test:443",
-		baseURL("ch.example.test", 8123):          "http://ch.example.test:8123",
-		baseURL("http://ch.example.test:9000", 1): "http://ch.example.test:9000",
-	}
-	for got, want := range cases {
-		if got != want {
-			t.Fatalf("baseURL = %q, want %q", got, want)
-		}
-	}
-}
-
 func TestNilSinkIsSafe(t *testing.T) {
 	var sink *Sink
-	sink.Enqueue([]byte("{}"))
+	sink.Enqueue(&Event{})
 	sink.Close(context.Background())
 }

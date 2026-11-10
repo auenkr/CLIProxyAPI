@@ -23,7 +23,7 @@ var sensitiveHeaders = map[string]bool{
 	"set-cookie":          true,
 }
 
-// Event is one captured request.
+// Event is one captured request, stored as one row of the request table.
 type Event struct {
 	Timestamp        time.Time
 	RequestID        string
@@ -43,37 +43,6 @@ type Event struct {
 	ResponseBody      []byte
 	ResponseBodySize  int64
 	ResponseBodyTrunc bool
-}
-
-// Encode renders the event as one NDJSON line matching the proxy_requests schema.
-func (e *Event) Encode() []byte {
-	doc := ojson.NewDocString("{}")
-	_ = doc.Set("timestamp", e.Timestamp.UTC().Format("2006-01-02 15:04:05.000"))
-	_ = doc.Set("request_id", e.RequestID)
-	_ = doc.Set("method", e.Method)
-	_ = doc.Set("path", e.Path)
-	_ = doc.Set("query", e.Query)
-	_ = doc.Set("status", e.Status)
-	_ = doc.Set("duration_ms", e.DurationMs)
-	_ = doc.Set("client_ip", e.ClientIP)
-	_ = doc.Set("user_agent", e.UserAgent)
-	_ = doc.Set("request_headers", HeadersJSON(e.RequestHeaders))
-	_ = doc.Set("request_body", strings.ToValidUTF8(string(e.RequestBody), "�"))
-	_ = doc.Set("request_body_bytes", e.RequestBodySize)
-	truncated := 0
-	if e.RequestBodyTrunc {
-		truncated = 1
-	}
-	_ = doc.Set("request_body_truncated", truncated)
-	_ = doc.Set("response_headers", HeadersJSON(e.ResponseHeaders))
-	_ = doc.Set("response_body", strings.ToValidUTF8(string(e.ResponseBody), "�"))
-	_ = doc.Set("response_body_bytes", e.ResponseBodySize)
-	responseTruncated := 0
-	if e.ResponseBodyTrunc {
-		responseTruncated = 1
-	}
-	_ = doc.Set("response_body_truncated", responseTruncated)
-	return doc.Bytes()
 }
 
 // HeadersJSON serialises headers as a JSON object of name to value list, redacting sensitive ones.
@@ -109,4 +78,63 @@ func HeadersJSON(headers http.Header) string {
 	}
 	buf = append(buf, '}')
 	return string(buf)
+}
+
+// columns lists the insert columns in the order produced by row.
+var columns = []string{
+	"timestamp", "request_id", "method", "path", "query", "status", "duration_ms",
+	"client_ip", "user_agent", "request_headers", "request_body", "request_body_bytes",
+	"request_body_truncated", "response_headers", "response_body", "response_body_bytes",
+	"response_body_truncated",
+}
+
+func flag(v bool) uint8 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+// clampU32 converts a non-negative size to the UInt32 column type.
+func clampU32(v int64) uint32 {
+	switch {
+	case v < 0:
+		return 0
+	case v > int64(^uint32(0)):
+		return ^uint32(0)
+	default:
+		return uint32(v)
+	}
+}
+
+// row returns the column values in the order of columns.
+func (e *Event) row() []any {
+	status := e.Status
+	if status < 0 || status > 65535 {
+		status = 0
+	}
+	return []any{
+		e.Timestamp.UTC(),
+		e.RequestID,
+		e.Method,
+		e.Path,
+		e.Query,
+		uint16(status),
+		clampU32(e.DurationMs),
+		e.ClientIP,
+		e.UserAgent,
+		HeadersJSON(e.RequestHeaders),
+		strings.ToValidUTF8(string(e.RequestBody), "\uFFFD"),
+		clampU32(e.RequestBodySize),
+		flag(e.RequestBodyTrunc),
+		HeadersJSON(e.ResponseHeaders),
+		strings.ToValidUTF8(string(e.ResponseBody), "\uFFFD"),
+		clampU32(e.ResponseBodySize),
+		flag(e.ResponseBodyTrunc),
+	}
+}
+
+// size approximates the memory held by the event for queue accounting.
+func (e *Event) size() int64 {
+	return int64(len(e.RequestBody)+len(e.ResponseBody)+len(e.Path)+len(e.Query)+len(e.UserAgent)) + 1024
 }

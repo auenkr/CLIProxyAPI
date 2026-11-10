@@ -98,7 +98,7 @@ func ClickHouseLoggingMiddleware(sink *clickhouselog.Sink) gin.HandlerFunc {
 				}
 				event.ResponseBody = decoded
 			}
-			sink.Enqueue(event.Encode())
+			sink.Enqueue(event)
 		})
 	}
 }

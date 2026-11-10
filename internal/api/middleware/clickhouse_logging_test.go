@@ -1,8 +1,6 @@
 package middleware
 
 import (
-	"bufio"
-	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
@@ -14,32 +12,19 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clickhouselog"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
 func TestClickHouseLoggingCapturesRequestAndRedactsCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var mu sync.Mutex
-	var lines []string
-	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		zr, err := gzip.NewReader(r.Body)
-		if err != nil {
-			t.Errorf("gzip: %v", err)
-			return
-		}
-		scanner := bufio.NewScanner(zr)
-		scanner.Buffer(make([]byte, 1<<20), 1<<24)
+	var events []*clickhouselog.Event
+	sink := clickhouselog.NewWithInserter(func(_ context.Context, batch []*clickhouselog.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-		}
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer ingest.Close()
-
-	sink := clickhouselog.New(config.ClickHouseConfig{Enable: true, Username: "u", Token: "tok", Host: ingest.URL})
+		events = append(events, batch...)
+		return nil
+	})
 
 	var handlerSaw string
 	router := gin.New()
@@ -68,30 +53,32 @@ func TestClickHouseLoggingCapturesRequestAndRedactsCredentials(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(lines) != 1 {
-		t.Fatalf("captured %d events, want 1 (management paths are skipped): %v", len(lines), lines)
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want 1 (management paths are skipped)", len(events))
 	}
-	line := lines[0]
-	if strings.Contains(line, "super-secret") || strings.Contains(line, "sk-secret") {
-		t.Fatalf("credentials leaked: %s", line)
+	event := events[0]
+	requestHeaders := clickhouselog.HeadersJSON(event.RequestHeaders)
+	if strings.Contains(requestHeaders, "super-secret") || strings.Contains(requestHeaders, "sk-secret") {
+		t.Fatalf("credentials leaked: %s", requestHeaders)
 	}
-	if got := ojson.Get(line, "request_body").String(); got != body {
-		t.Fatalf("request_body = %q", got)
+	if got := string(event.RequestBody); got != body {
+		t.Fatalf("request body = %q", got)
 	}
-	if got := ojson.Get(line, "user_agent").String(); !strings.Contains(got, "claude-desktop") {
-		t.Fatalf("user_agent = %q", got)
+	if !strings.Contains(event.UserAgent, "claude-desktop") {
+		t.Fatalf("user agent = %q", event.UserAgent)
 	}
-	if got := ojson.Get(line, "status").Int(); got != 200 {
-		t.Fatalf("status = %d", got)
+	if event.Status != 200 {
+		t.Fatalf("status = %d", event.Status)
 	}
-	if got := ojson.Get(line, "response_body").String(); got != "ok-response-body" {
-		t.Fatalf("response_body = %q", got)
+	if got := string(event.ResponseBody); got != "ok-response-body" {
+		t.Fatalf("response body = %q", got)
 	}
-	if got := ojson.Get(ojson.Get(line, "response_headers").String(), "X-Reply.0").String(); got != "hello" {
+	responseHeaders := clickhouselog.HeadersJSON(event.ResponseHeaders)
+	if got := ojson.Get(responseHeaders, "X-Reply.0").String(); got != "hello" {
 		t.Fatalf("response X-Reply = %q", got)
 	}
-	if strings.Contains(line, "secret-cookie") {
-		t.Fatalf("response cookie leaked: %s", line)
+	if strings.Contains(responseHeaders, "secret-cookie") {
+		t.Fatalf("response cookie leaked: %s", responseHeaders)
 	}
 }
 
@@ -99,24 +86,13 @@ func TestClickHouseLoggingCapturesBodyOfRejectedRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var mu sync.Mutex
-	var lines []string
-	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		zr, err := gzip.NewReader(r.Body)
-		if err != nil {
-			t.Errorf("gzip: %v", err)
-			return
-		}
-		scanner := bufio.NewScanner(zr)
+	var events []*clickhouselog.Event
+	sink := clickhouselog.NewWithInserter(func(_ context.Context, batch []*clickhouselog.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-		}
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer ingest.Close()
-
-	sink := clickhouselog.New(config.ClickHouseConfig{Enable: true, Username: "u", Token: "tok", Host: ingest.URL})
+		events = append(events, batch...)
+		return nil
+	})
 
 	router := gin.New()
 	router.Use(ClickHouseLoggingMiddleware(sink))
@@ -129,13 +105,13 @@ func TestClickHouseLoggingCapturesBodyOfRejectedRequest(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(lines) != 1 {
-		t.Fatalf("captured %d events, want 1", len(lines))
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want 1", len(events))
 	}
-	if got := ojson.Get(lines[0], "request_body").String(); got != body {
-		t.Fatalf("request_body = %q, want %q", got, body)
+	if got := string(events[0].RequestBody); got != body {
+		t.Fatalf("request body = %q, want %q", got, body)
 	}
-	if got := ojson.Get(lines[0], "status").Int(); got != http.StatusUnauthorized {
-		t.Fatalf("status = %d", got)
+	if events[0].Status != http.StatusUnauthorized {
+		t.Fatalf("status = %d", events[0].Status)
 	}
 }

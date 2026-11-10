@@ -1,21 +1,18 @@
 // Package clickhouselog ships captured proxy requests to ClickHouse asynchronously.
 // Request handling never waits on ClickHouse: events are queued in memory and a background
-// worker inserts them in JSONEachRow batches through the ClickHouse HTTP interface.
+// worker inserts them in batches with the official ClickHouse Go client.
 package clickhouselog
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	log "github.com/sirupsen/logrus"
 )
@@ -34,14 +31,14 @@ const (
 	retryBackoffStart = 500 * time.Millisecond
 )
 
+// Inserter writes one batch of events to ClickHouse.
+type Inserter func(ctx context.Context, batch []*Event) error
+
 // Sink queues events and delivers them to ClickHouse in the background.
 type Sink struct {
-	endpoint string
-	username string
-	token    string
-	client   *http.Client
+	insert Inserter
 
-	queue       chan []byte
+	queue       chan *Event
 	queuedBytes atomic.Int64
 	dropped     atomic.Uint64
 
@@ -52,10 +49,10 @@ type Sink struct {
 }
 
 // New builds a started Sink from configuration. It returns nil when capture is
-// disabled or host or token is missing.
+// disabled, host or token is missing, or the client cannot be created.
 func New(cfg config.ClickHouseConfig) *Sink {
 	token := strings.TrimSpace(cfg.Token)
-	host := strings.TrimRight(strings.TrimSpace(cfg.Host), "/")
+	host := strings.TrimSpace(cfg.Host)
 	if !cfg.Enable || token == "" || host == "" {
 		return nil
 	}
@@ -74,51 +71,82 @@ func New(cfg config.ClickHouseConfig) *Sink {
 	if database := strings.TrimSpace(cfg.Database); database != "" {
 		table = database + "." + table
 	}
-	return newSink(baseURL(host, port), username, token, table, &http.Client{})
+
+	secure := port != 8123 && port != 9000
+	if rest, ok := strings.CutPrefix(host, "http://"); ok {
+		host, secure = rest, false
+	} else if rest, ok := strings.CutPrefix(host, "https://"); ok {
+		host, secure = rest, true
+	}
+	host = strings.TrimRight(host, "/")
+
+	options := &clickhouse.Options{
+		Addr:     []string{fmt.Sprintf("%s:%d", host, port)},
+		Protocol: clickhouse.HTTP,
+		Auth: clickhouse.Auth{
+			Database: strings.TrimSpace(cfg.Database),
+			Username: username,
+			Password: token,
+		},
+	}
+	if secure {
+		options.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	conn, err := clickhouse.Open(options)
+	if err != nil {
+		log.WithError(err).Warn("clickhouse request logging: open client")
+		return nil
+	}
+	log.Infof("clickhouse request logging enabled: addr=%s table=%s user=%s", options.Addr[0], table, username)
+	return NewWithInserter(sdkInserter(conn, table))
 }
 
-// baseURL builds the ClickHouse HTTP endpoint. A scheme in host wins; otherwise https is
-// assumed except for the plain HTTP default port 8123.
-func baseURL(host string, port int) string {
-	if strings.Contains(host, "://") {
-		return host
-	}
-	scheme := "https"
-	if port == 8123 {
-		scheme = "http"
-	}
-	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
-}
-
-func newSink(base, username, token, table string, client *http.Client) *Sink {
-	query := url.Values{"query": {"INSERT INTO " + table + " FORMAT JSONEachRow"}}
+// NewWithInserter builds a started Sink that delivers batches through insert.
+func NewWithInserter(insert Inserter) *Sink {
 	s := &Sink{
-		endpoint: strings.TrimRight(base, "/") + "/?" + query.Encode(),
-		username: username,
-		token:    token,
-		client:   client,
-		queue:    make(chan []byte, queueSize),
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
+		insert: insert,
+		queue:  make(chan *Event, queueSize),
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
 	}
 	go s.run()
-	log.Infof("clickhouse request logging enabled: endpoint=%s table=%s user=%s", base, table, username)
 	return s
 }
 
-// Enqueue adds one encoded NDJSON line. It never blocks; the event is dropped when the queue is full.
-func (s *Sink) Enqueue(line []byte) {
-	if s == nil || len(line) == 0 {
+// sdkInserter inserts batches with the official client's batch API.
+func sdkInserter(conn clickhouse.Conn, table string) Inserter {
+	query := "INSERT INTO " + table + " (" + strings.Join(columns, ", ") + ")"
+	return func(ctx context.Context, events []*Event) error {
+		batch, err := conn.PrepareBatch(ctx, query)
+		if err != nil {
+			return fmt.Errorf("prepare batch: %w", err)
+		}
+		for _, e := range events {
+			if err = batch.Append(e.row()...); err != nil {
+				_ = batch.Abort()
+				return fmt.Errorf("append row: %w", err)
+			}
+		}
+		if err = batch.Send(); err != nil {
+			return fmt.Errorf("send batch: %w", err)
+		}
+		return nil
+	}
+}
+
+// Enqueue adds one event. It never blocks; the event is dropped when the queue is full.
+func (s *Sink) Enqueue(event *Event) {
+	if s == nil || event == nil {
 		return
 	}
-	size := int64(len(line))
+	size := event.size()
 	if s.queuedBytes.Add(size) > maxQueuedBytes {
 		s.queuedBytes.Add(-size)
 		s.noteDrop()
 		return
 	}
 	select {
-	case s.queue <- line:
+	case s.queue <- event:
 	default:
 		s.queuedBytes.Add(-size)
 		s.noteDrop()
@@ -172,7 +200,7 @@ func (s *Sink) run() {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 
-	var batch [][]byte
+	var batch []*Event
 	batchBytes := 0
 	flush := func() {
 		if len(batch) == 0 {
@@ -182,10 +210,11 @@ func (s *Sink) run() {
 		batch = batch[:0]
 		batchBytes = 0
 	}
-	add := func(line []byte) {
-		s.queuedBytes.Add(-int64(len(line)))
-		batch = append(batch, line)
-		batchBytes += len(line) + 1
+	add := func(event *Event) {
+		size := event.size()
+		s.queuedBytes.Add(-size)
+		batch = append(batch, event)
+		batchBytes += int(size)
 		if len(batch) >= maxBatchEvents || batchBytes >= maxBatchBytes {
 			flush()
 		}
@@ -193,15 +222,15 @@ func (s *Sink) run() {
 
 	for {
 		select {
-		case line := <-s.queue:
-			add(line)
+		case event := <-s.queue:
+			add(event)
 		case <-ticker.C:
 			flush()
 		case <-s.stop:
 			for {
 				select {
-				case line := <-s.queue:
-					add(line)
+				case event := <-s.queue:
+					add(event)
 				default:
 					flush()
 					return
@@ -211,32 +240,15 @@ func (s *Sink) run() {
 	}
 }
 
-func (s *Sink) send(batch [][]byte) {
-	var raw bytes.Buffer
-	for _, line := range batch {
-		raw.Write(line)
-		raw.WriteByte('\n')
-	}
-	var body bytes.Buffer
-	gz := gzip.NewWriter(&body)
-	if _, err := gz.Write(raw.Bytes()); err != nil {
-		log.WithError(err).Warn("clickhouse request logging: compress batch")
-		return
-	}
-	if err := gz.Close(); err != nil {
-		log.WithError(err).Warn("clickhouse request logging: compress batch")
-		return
-	}
-
+func (s *Sink) send(batch []*Event) {
 	backoff := retryBackoffStart
 	var lastErr error
 	for attempt := 1; attempt <= maxSendAttempts; attempt++ {
-		retry, err := s.post(body.Bytes())
-		if err == nil {
+		lastErr = s.insert(context.Background(), batch)
+		if lastErr == nil {
 			return
 		}
-		lastErr = err
-		if !retry || attempt == maxSendAttempts {
+		if attempt == maxSendAttempts {
 			break
 		}
 		select {
@@ -248,31 +260,4 @@ func (s *Sink) send(batch [][]byte) {
 		}
 	}
 	log.WithError(lastErr).Warnf("clickhouse request logging: dropped batch of %d events", len(batch))
-}
-
-// post sends one request and reports whether a failure is worth retrying.
-func (s *Sink) post(body []byte) (retry bool, err error) {
-	req, err := http.NewRequest(http.MethodPost, s.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("X-ClickHouse-User", s.username)
-	req.Header.Set("X-ClickHouse-Key", s.token)
-	req.Header.Set("Content-Type", "application/x-ndjson")
-	req.Header.Set("Content-Encoding", "gzip")
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return true, err
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.WithError(errClose).Debug("clickhouse request logging: close response body")
-		}
-	}()
-	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return false, nil
-	}
-	retry = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
-	return retry, fmt.Errorf("clickhouse returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 }
