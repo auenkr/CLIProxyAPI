@@ -1,4 +1,4 @@
-package tinybirdlog
+package clickhouselog
 
 import (
 	"net/http"

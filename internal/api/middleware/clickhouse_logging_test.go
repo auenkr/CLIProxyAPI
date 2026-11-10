@@ -13,11 +13,11 @@ import (
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/clickhouselog"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/tinybirdlog"
 )
 
-func TestTinybirdLoggingCapturesRequestAndRedactsCredentials(t *testing.T) {
+func TestClickHouseLoggingCapturesRequestAndRedactsCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var mu sync.Mutex
@@ -39,11 +39,11 @@ func TestTinybirdLoggingCapturesRequestAndRedactsCredentials(t *testing.T) {
 	}))
 	defer ingest.Close()
 
-	sink := tinybirdlog.New(config.TinybirdConfig{Enable: true, Token: "tok", Host: ingest.URL})
+	sink := clickhouselog.New(config.ClickHouseConfig{Enable: true, Username: "u", Token: "tok", Host: ingest.URL})
 
 	var handlerSaw string
 	router := gin.New()
-	router.Use(TinybirdLoggingMiddleware(sink))
+	router.Use(ClickHouseLoggingMiddleware(sink))
 	router.POST("/v1/messages", func(c *gin.Context) {
 		data, _ := io.ReadAll(c.Request.Body)
 		handlerSaw = string(data)
@@ -95,7 +95,7 @@ func TestTinybirdLoggingCapturesRequestAndRedactsCredentials(t *testing.T) {
 	}
 }
 
-func TestTinybirdLoggingCapturesBodyOfRejectedRequest(t *testing.T) {
+func TestClickHouseLoggingCapturesBodyOfRejectedRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var mu sync.Mutex
@@ -116,10 +116,10 @@ func TestTinybirdLoggingCapturesBodyOfRejectedRequest(t *testing.T) {
 	}))
 	defer ingest.Close()
 
-	sink := tinybirdlog.New(config.TinybirdConfig{Enable: true, Token: "tok", Host: ingest.URL})
+	sink := clickhouselog.New(config.ClickHouseConfig{Enable: true, Username: "u", Token: "tok", Host: ingest.URL})
 
 	router := gin.New()
-	router.Use(TinybirdLoggingMiddleware(sink))
+	router.Use(ClickHouseLoggingMiddleware(sink))
 	// Rejects before ever reading the body, like an authentication failure.
 	router.POST("/v1/messages", func(c *gin.Context) { c.AbortWithStatus(http.StatusUnauthorized) })
 

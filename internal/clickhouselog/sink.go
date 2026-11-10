@@ -1,7 +1,7 @@
-// Package tinybirdlog ships captured proxy requests to Tinybird (ClickHouse) asynchronously.
-// Request handling never waits on Tinybird: events are queued in memory and a background
-// worker posts them in NDJSON batches through the Events API.
-package tinybirdlog
+// Package clickhouselog ships captured proxy requests to ClickHouse asynchronously.
+// Request handling never waits on ClickHouse: events are queued in memory and a background
+// worker inserts them in JSONEachRow batches through the ClickHouse HTTP interface.
+package clickhouselog
 
 import (
 	"bytes"
@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	defaultHost       = "https://api.ap-east-1.aws.tinybird.co"
-	defaultDatasource = "proxy_requests"
+	defaultPort     = 443
+	defaultUsername = "default"
+	defaultTable    = "proxy_requests"
 
 	queueSize         = 1024
 	maxQueuedBytes    = 64 << 20 // events are dropped once this many bytes are waiting
@@ -33,9 +34,10 @@ const (
 	retryBackoffStart = 500 * time.Millisecond
 )
 
-// Sink queues events and delivers them to Tinybird in the background.
+// Sink queues events and delivers them to ClickHouse in the background.
 type Sink struct {
 	endpoint string
+	username string
 	token    string
 	client   *http.Client
 
@@ -50,27 +52,49 @@ type Sink struct {
 }
 
 // New builds a started Sink from configuration. It returns nil when capture is
-// disabled or no token is set.
-func New(cfg config.TinybirdConfig) *Sink {
+// disabled or host or token is missing.
+func New(cfg config.ClickHouseConfig) *Sink {
 	token := strings.TrimSpace(cfg.Token)
-	if !cfg.Enable || token == "" {
+	host := strings.TrimRight(strings.TrimSpace(cfg.Host), "/")
+	if !cfg.Enable || token == "" || host == "" {
 		return nil
 	}
-	host := strings.TrimRight(strings.TrimSpace(cfg.Host), "/")
-	if host == "" {
-		host = defaultHost
+	port := cfg.Port
+	if port <= 0 {
+		port = defaultPort
 	}
-	datasource := strings.TrimSpace(cfg.Datasource)
-	if datasource == "" {
-		datasource = defaultDatasource
+	username := strings.TrimSpace(cfg.Username)
+	if username == "" {
+		username = defaultUsername
 	}
-	return newSink(host, token, datasource, &http.Client{})
+	table := strings.TrimSpace(cfg.Table)
+	if table == "" {
+		table = defaultTable
+	}
+	if database := strings.TrimSpace(cfg.Database); database != "" {
+		table = database + "." + table
+	}
+	return newSink(baseURL(host, port), username, token, table, &http.Client{})
 }
 
-func newSink(host, token, datasource string, client *http.Client) *Sink {
-	query := url.Values{"name": {datasource}, "wait": {"false"}}
+// baseURL builds the ClickHouse HTTP endpoint. A scheme in host wins; otherwise https is
+// assumed except for the plain HTTP default port 8123.
+func baseURL(host string, port int) string {
+	if strings.Contains(host, "://") {
+		return host
+	}
+	scheme := "https"
+	if port == 8123 {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+}
+
+func newSink(base, username, token, table string, client *http.Client) *Sink {
+	query := url.Values{"query": {"INSERT INTO " + table + " FORMAT JSONEachRow"}}
 	s := &Sink{
-		endpoint: host + "/v0/events?" + query.Encode(),
+		endpoint: strings.TrimRight(base, "/") + "/?" + query.Encode(),
+		username: username,
 		token:    token,
 		client:   client,
 		queue:    make(chan []byte, queueSize),
@@ -78,7 +102,7 @@ func newSink(host, token, datasource string, client *http.Client) *Sink {
 		done:     make(chan struct{}),
 	}
 	go s.run()
-	log.Infof("tinybird request logging enabled: host=%s datasource=%s", host, datasource)
+	log.Infof("clickhouse request logging enabled: endpoint=%s table=%s user=%s", base, table, username)
 	return s
 }
 
@@ -103,7 +127,7 @@ func (s *Sink) Enqueue(line []byte) {
 
 func (s *Sink) noteDrop() {
 	if n := s.dropped.Add(1); n == 1 || n%100 == 0 {
-		log.Warnf("tinybird request logging: queue full, %d events dropped so far", n)
+		log.Warnf("clickhouse request logging: queue full, %d events dropped so far", n)
 	}
 }
 
@@ -133,13 +157,13 @@ func (s *Sink) Close(ctx context.Context) {
 	select {
 	case <-pendingDone:
 	case <-ctx.Done():
-		log.Warn("tinybird request logging: in-flight events abandoned at shutdown")
+		log.Warn("clickhouse request logging: in-flight events abandoned at shutdown")
 	}
 	s.closeOnce.Do(func() { close(s.stop) })
 	select {
 	case <-s.done:
 	case <-ctx.Done():
-		log.Warn("tinybird request logging: shutdown flush abandoned")
+		log.Warn("clickhouse request logging: shutdown flush abandoned")
 	}
 }
 
@@ -196,11 +220,11 @@ func (s *Sink) send(batch [][]byte) {
 	var body bytes.Buffer
 	gz := gzip.NewWriter(&body)
 	if _, err := gz.Write(raw.Bytes()); err != nil {
-		log.WithError(err).Warn("tinybird request logging: compress batch")
+		log.WithError(err).Warn("clickhouse request logging: compress batch")
 		return
 	}
 	if err := gz.Close(); err != nil {
-		log.WithError(err).Warn("tinybird request logging: compress batch")
+		log.WithError(err).Warn("clickhouse request logging: compress batch")
 		return
 	}
 
@@ -223,7 +247,7 @@ func (s *Sink) send(batch [][]byte) {
 			attempt = maxSendAttempts - 1
 		}
 	}
-	log.WithError(lastErr).Warnf("tinybird request logging: dropped batch of %d events", len(batch))
+	log.WithError(lastErr).Warnf("clickhouse request logging: dropped batch of %d events", len(batch))
 }
 
 // post sends one request and reports whether a failure is worth retrying.
@@ -232,7 +256,8 @@ func (s *Sink) post(body []byte) (retry bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("Authorization", "Bearer "+s.token)
+	req.Header.Set("X-ClickHouse-User", s.username)
+	req.Header.Set("X-ClickHouse-Key", s.token)
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	req.Header.Set("Content-Encoding", "gzip")
 	resp, err := s.client.Do(req)
@@ -241,7 +266,7 @@ func (s *Sink) post(body []byte) (retry bool, err error) {
 	}
 	defer func() {
 		if errClose := resp.Body.Close(); errClose != nil {
-			log.WithError(errClose).Debug("tinybird request logging: close response body")
+			log.WithError(errClose).Debug("clickhouse request logging: close response body")
 		}
 	}()
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -249,5 +274,5 @@ func (s *Sink) post(body []byte) (retry bool, err error) {
 		return false, nil
 	}
 	retry = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
-	return retry, fmt.Errorf("tinybird returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	return retry, fmt.Errorf("clickhouse returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 }
