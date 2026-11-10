@@ -21,7 +21,6 @@ import (
 	"github.com/gin-gonic/gin"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v8/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/clickhouselog"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/githubauth"
@@ -29,6 +28,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/tinybirdlog"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/usagestate"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
@@ -90,9 +90,9 @@ type Server struct {
 	mgmt                 *managementHandlers.Handler
 	quotaCollectorCancel context.CancelFunc
 
-	// clickhouseSink ships captured requests to ClickHouse; nil when disabled.
-	clickhouseSink *clickhouselog.Sink
-	usageCost      *usagecost.Store
+	// tinybirdSink ships captured requests to Tinybird; nil when disabled.
+	tinybirdSink *tinybirdlog.Sink
+	usageCost    *usagecost.Store
 
 	// usageState persists runtime usage state (request counters + token
 	// distribution) to a single file asynchronously. Nil when disabled.
@@ -188,9 +188,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	engine.Use(logging.CPATraceIDMiddleware())
 	engine.Use(s.maxRequestBodyBytesMiddleware())
 
-	// Optional ClickHouse capture of every request (observability.clickhouse in config.yaml).
-	s.clickhouseSink = clickhouselog.New(cfg.ClickHouse)
-	engine.Use(middleware.ClickHouseLoggingMiddleware(s.clickhouseSink))
+	// Optional Tinybird capture of every request (observability.tinybird in config.yaml).
+	s.tinybirdSink = tinybirdlog.New(cfg.Tinybird)
+	engine.Use(middleware.TinybirdLoggingMiddleware(s.tinybirdSink))
 
 	// Add request logging middleware before recovery and extra middleware so that
 	// any panic response written by GinLogrusRecovery or custom extraMiddleware is
@@ -461,7 +461,7 @@ func (s *Server) Stop(ctx context.Context) error {
 		cancelQuota()
 	}
 	log.Debug("Stopping API server...")
-	defer s.clickhouseSink.Close(ctx)
+	defer s.tinybirdSink.Close(ctx)
 
 	if s.keepAliveEnabled {
 		select {

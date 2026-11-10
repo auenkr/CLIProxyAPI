@@ -1265,22 +1265,14 @@ observability:
     # Nonpositive values use the default of 14 days.
     retention-days: 14
 
-  # Capture every request (headers except credentials, plus body) into ClickHouse through
-  # its HTTP interface, asynchronously. Authorization, X-Api-Key, X-Goog-Api-Key and Cookie
-  # values are redacted. Management requests are excluded. Changes need a restart.
-  # Rows are inserted with "INSERT INTO <table> FORMAT JSONEachRow"; the target must allow writes.
-  clickhouse:
+  # Capture every request (headers except credentials, plus body) into Tinybird/ClickHouse
+  # asynchronously. Authorization, X-Api-Key, X-Goog-Api-Key and Cookie values are redacted.
+  # Management requests are excluded. Changes need a restart.
+  tinybird:
     enable: false
-    host: ""            # host name; https is used unless the port is 8123 or a scheme is given
-    port: 443
-    username: "default" # sent as X-ClickHouse-User
-    token: ""           # password or token, sent as X-ClickHouse-Key
-    database: ""        # optional; empty uses the user's default database
-    table: "proxy_requests"
-    # Optional: send rows as gzipped NDJSON over HTTP instead of the ClickHouse client.
-    # Needed when the ClickHouse interface is read-only. The token is sent as a bearer token.
-    ingest-url: ""
-    ingest-token: ""
+    host: "https://api.ap-east-1.aws.tinybird.co"
+    token: ""
+    datasource: "proxy_requests"
 
   usage:
     # When false, disable in-memory usage statistics aggregation

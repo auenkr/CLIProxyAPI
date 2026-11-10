@@ -8,22 +8,22 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/clickhouselog"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/tinybirdlog"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 )
 
 const (
-	// clickhouseMaxBodyBytes bounds the stored request body.
-	clickhouseMaxBodyBytes = 2 << 20
-	// clickhouseMaxEncodedBodyBytes bounds the raw bytes held for a compressed body so it can still be decoded.
-	clickhouseMaxEncodedBodyBytes = 8 << 20
+	// tinybirdMaxBodyBytes bounds the stored request body.
+	tinybirdMaxBodyBytes = 2 << 20
+	// tinybirdMaxEncodedBodyBytes bounds the raw bytes held for a compressed body so it can still be decoded.
+	tinybirdMaxEncodedBodyBytes = 8 << 20
 )
 
-// ClickHouseLoggingMiddleware captures every request (headers and body, with credentials redacted)
+// TinybirdLoggingMiddleware captures every request (headers and body, with credentials redacted)
 // and hands it to the sink. The body is read up front and replayed to the handler,
 // and decoding and delivery happen off the request path. A nil sink disables the middleware.
-func ClickHouseLoggingMiddleware(sink *clickhouselog.Sink) gin.HandlerFunc {
+func TinybirdLoggingMiddleware(sink *tinybirdlog.Sink) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if sink == nil || !shouldLogRequest(c.Request.URL.Path) {
 			c.Next()
@@ -37,9 +37,9 @@ func ClickHouseLoggingMiddleware(sink *clickhouselog.Sink) gin.HandlerFunc {
 		var raw []byte
 		truncated := false
 		if c.Request.Body != nil && c.Request.Body != http.NoBody && c.Request.ContentLength != 0 {
-			limit := clickhouseMaxBodyBytes
+			limit := tinybirdMaxBodyBytes
 			if encoding != "" && !strings.EqualFold(encoding, "identity") {
-				limit = clickhouseMaxEncodedBodyBytes
+				limit = tinybirdMaxEncodedBodyBytes
 			}
 			original := c.Request.Body
 			head, errRead := io.ReadAll(io.LimitReader(original, int64(limit)))
@@ -57,7 +57,7 @@ func ClickHouseLoggingMiddleware(sink *clickhouselog.Sink) gin.HandlerFunc {
 
 		c.Next()
 
-		event := &clickhouselog.Event{
+		event := &tinybirdlog.Event{
 			Timestamp:      start,
 			RequestID:      logging.GetGinRequestID(c),
 			Method:         c.Request.Method,
@@ -83,22 +83,22 @@ func ClickHouseLoggingMiddleware(sink *clickhouselog.Sink) gin.HandlerFunc {
 		// Decoding a compressed body can be slow, so finish the event outside the request path.
 		sink.Async(func() {
 			if len(raw) > 0 {
-				decoded := decodeCapturedRequestBodyForLogWithLimit(raw, encoding, clickhouseMaxBodyBytes)
-				if len(decoded) > clickhouseMaxBodyBytes {
-					decoded = decoded[:clickhouseMaxBodyBytes]
+				decoded := decodeCapturedRequestBodyForLogWithLimit(raw, encoding, tinybirdMaxBodyBytes)
+				if len(decoded) > tinybirdMaxBodyBytes {
+					decoded = decoded[:tinybirdMaxBodyBytes]
 					event.RequestBodyTrunc = true
 				}
 				event.RequestBody = decoded
 			}
 			if len(responseRaw) > 0 {
-				decoded := decodeCapturedRequestBodyForLogWithLimit(responseRaw, responseEncoding, clickhouseMaxBodyBytes)
-				if len(decoded) > clickhouseMaxBodyBytes {
-					decoded = decoded[:clickhouseMaxBodyBytes]
+				decoded := decodeCapturedRequestBodyForLogWithLimit(responseRaw, responseEncoding, tinybirdMaxBodyBytes)
+				if len(decoded) > tinybirdMaxBodyBytes {
+					decoded = decoded[:tinybirdMaxBodyBytes]
 					event.ResponseBodyTrunc = true
 				}
 				event.ResponseBody = decoded
 			}
-			sink.Enqueue(event)
+			sink.Enqueue(event.Encode())
 		})
 	}
 }
@@ -115,7 +115,7 @@ type responseCapture struct {
 
 func (w *responseCapture) record(data []byte) {
 	w.total += int64(len(data))
-	room := clickhouseMaxBodyBytes - w.body.Len()
+	room := tinybirdMaxBodyBytes - w.body.Len()
 	if room <= 0 {
 		w.truncated = w.truncated || len(data) > 0
 		return

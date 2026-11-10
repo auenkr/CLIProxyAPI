@@ -423,30 +423,16 @@ type PprofConfig struct {
 	Addr string `yaml:"addr" json:"addr"`
 }
 
-// ClickHouseConfig controls asynchronous capture of every request into ClickHouse
-// through its HTTP interface.
-type ClickHouseConfig struct {
+// TinybirdConfig controls asynchronous capture of every request into Tinybird (ClickHouse).
+type TinybirdConfig struct {
 	// Enable toggles request capture. When false nothing is sent.
 	Enable bool `yaml:"enable" json:"-"`
-	// Host is the ClickHouse HTTP interface host name. An optional http:// or https://
-	// prefix selects the scheme; otherwise https is used unless Port is 8123.
+	// Host is the Tinybird API host, for example https://api.ap-east-1.aws.tinybird.co.
 	Host string `yaml:"host" json:"-"`
-	// Port is the ClickHouse HTTP interface port. Defaults to 443.
-	Port int `yaml:"port" json:"-"`
-	// Username is sent as X-ClickHouse-User. Defaults to "default".
-	Username string `yaml:"username" json:"-"`
-	// Token is the password or token sent as X-ClickHouse-Key.
+	// Token is a Tinybird token allowed to append to the data source.
 	Token string `yaml:"token" json:"-"`
-	// Database is the target database. Empty uses the user's default database.
-	Database string `yaml:"database" json:"-"`
-	// Table is the target table name. Defaults to proxy_requests.
-	Table string `yaml:"table" json:"-"`
-	// IngestURL optionally sends rows as gzipped NDJSON over HTTP to this endpoint instead of
-	// using the ClickHouse client. Use it when the ClickHouse interface is read-only. When
-	// set, Host and Token are not needed for writing.
-	IngestURL string `yaml:"ingest-url" json:"-"`
-	// IngestToken is sent as a bearer token to IngestURL.
-	IngestToken string `yaml:"ingest-token" json:"-"`
+	// Datasource is the target data source name. Defaults to proxy_requests.
+	Datasource string `yaml:"datasource" json:"-"`
 }
 
 // DiscoveryInterfacesConfig specifies interface inclusion and exclusion rules.
