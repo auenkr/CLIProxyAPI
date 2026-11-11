@@ -3,6 +3,7 @@ package management
 import (
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,27 @@ type apiCallCacheEntry struct {
 	// lastGood keeps the most recent 2xx response; it outlives TTL and purges so
 	// a rate-limited upstream can still be answered with the last known data.
 	lastGood *apiCallResponse
+	// blockedUntil comes from an upstream 429 Retry-After; no request for this
+	// key goes upstream before it, even after a purge.
+	blockedUntil time.Time
+	limited      apiCallResponse
+}
+
+// retryAfter parses a Retry-After header (delta seconds or HTTP date).
+func retryAfter(header map[string][]string, now time.Time) (time.Time, bool) {
+	for k, values := range header {
+		if !strings.EqualFold(k, "Retry-After") || len(values) == 0 {
+			continue
+		}
+		v := strings.TrimSpace(values[0])
+		if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+			return now.Add(time.Duration(secs) * time.Second), true
+		}
+		if at, err := http.ParseTime(v); err == nil {
+			return at, true
+		}
+	}
+	return time.Time{}, false
 }
 
 type apiCallCache struct {
@@ -49,6 +71,9 @@ func (c *apiCallCache) get(authIndex, key string) (apiCallResponse, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[authIndex][key]
+	if ok && c.now().Before(entry.blockedUntil) {
+		return entry.resp, true
+	}
 	if !ok || entry.at.IsZero() || c.now().Sub(entry.at) >= apiCallCacheTTL {
 		return apiCallResponse{}, false
 	}
@@ -74,6 +99,11 @@ func (c *apiCallCache) store(authIndex, key string, resp apiCallResponse) (apiCa
 		good := resp
 		entry.lastGood = &good
 	case resp.StatusCode == 429 || resp.StatusCode >= 500:
+		if resp.StatusCode == 429 {
+			if until, ok := retryAfter(resp.Header, now); ok {
+				entry.blockedUntil, entry.limited = until, resp
+			}
+		}
 		if entry.lastGood != nil {
 			resp, stale = *entry.lastGood, true
 		}
@@ -83,6 +113,17 @@ func (c *apiCallCache) store(authIndex, key string, resp apiCallResponse) (apiCa
 	entry.at, entry.resp = now, resp
 	bucket[key] = entry
 	return resp, stale
+}
+
+// blocked returns the upstream 429 while its Retry-After window is open.
+func (c *apiCallCache) blocked(authIndex, key string) (apiCallResponse, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[authIndex][key]
+	if !ok || !c.now().Before(entry.blockedUntil) {
+		return apiCallResponse{}, false
+	}
+	return entry.limited, true
 }
 
 // purge marks cached responses stale for one auth index (or all when empty);

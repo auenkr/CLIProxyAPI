@@ -146,8 +146,16 @@ func (h *Handler) APICall(c *gin.Context) {
 	// any other method on the credential invalidates its cached reads.
 	cacheable := authIndex != "" && method == http.MethodGet && !body.NoCache
 	cacheKey := ""
-	if cacheable {
+	if authIndex != "" && method == http.MethodGet {
 		cacheKey = apiCallCacheKey(method, urlStr, requestProxyURL, body.Data, reqHeaders)
+		// Honor upstream Retry-After: fresh reads get the 429, never a stale body.
+		if limited, ok := sharedAPICallCache.blocked(authIndex, cacheKey); ok && body.NoCache {
+			c.Header("X-CPA-Cache", "rate-limited")
+			c.JSON(http.StatusOK, limited)
+			return
+		}
+	}
+	if cacheable {
 		if cached, ok := sharedAPICallCache.get(authIndex, cacheKey); ok {
 			c.Header("X-CPA-Cache", "hit")
 			c.JSON(http.StatusOK, cached)
@@ -253,6 +261,9 @@ func (h *Handler) APICall(c *gin.Context) {
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
 		Body:       string(respBody),
+	}
+	if authIndex != "" && method == http.MethodGet && body.NoCache && resp.StatusCode == http.StatusTooManyRequests {
+		sharedAPICallCache.store(authIndex, cacheKey, result)
 	}
 	if cacheable {
 		var stale bool
