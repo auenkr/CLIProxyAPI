@@ -2,6 +2,7 @@ package windowrefresh
 
 import (
 	"context"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,14 +42,14 @@ func newHarness(anchor string) *harness {
 // tick runs one scheduler pass and waits for the background check to finish.
 func (h *harness) tick() {
 	h.s.Tick(context.Background())
-	for i := 0; i < 2000; i++ {
+	for {
 		h.s.mu.Lock()
-		busy := h.s.inflight["a.json"]
+		busy := len(h.s.inflight) > 0
 		h.s.mu.Unlock()
 		if !busy {
 			return
 		}
-		time.Sleep(time.Millisecond)
+		runtime.Gosched()
 	}
 }
 

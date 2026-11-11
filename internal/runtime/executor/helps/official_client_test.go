@@ -44,6 +44,8 @@ func TestIsOfficialClaudeCodeRequest(t *testing.T) {
 		{name: "missing metadata user id", headers: confirmedClaudeCodeHeaders(), body: []byte(`{"messages":[]}`), want: false},
 		{name: "invalid metadata user id", headers: confirmedClaudeCodeHeaders(), body: claudeCodeDetectionPayload("not-a-claude-code-id"), want: false},
 		{name: "agent sdk typescript", headers: withUserAgent("claude-cli/2.1.306 (external, sdk-ts, agent-sdk/0.3.276)"), body: payload, want: true},
+		{name: "t3 code agent sdk request extension", headers: withUserAgent("claude-cli/2.2.0 (external, t3-code, agent-sdk/0.3.276, session/opaque)"), body: payload, want: true},
+		{name: "malformed sdk request extension", headers: withUserAgent("claude-cli/2.2.0 (external, t3-code, agent-sdk/0.3.276, broken)"), body: payload, want: false},
 		{name: "t3 code agent sdk", headers: withUserAgent("claude-cli/2.1.306 (external, t3-code, agent-sdk/0.3.276)"), body: payload, want: true},
 		{name: "agent sdk python", headers: withUserAgent("claude-cli/2.1.280 (external, sdk-py, agent-sdk/0.1.0)"), body: payload, want: true},
 		{name: "agent sdk without claude code signals", headers: http.Header{"User-Agent": {"claude-cli/2.1.306 (external, sdk-ts, agent-sdk/0.3.276)"}}, body: payload, want: false},

@@ -115,10 +115,11 @@ func IsOfficialClaudeCodeRequest(headers http.Header, payload []byte, countToken
 		return true
 	}
 	userAgent := strings.TrimSpace(headerValue(headers, "User-Agent"))
-	entrypoint, _ := parseClaudeCodeUserAgentDetails(userAgent)
-	if !claudeCodeNativeUserAgentPattern.MatchString(userAgent) {
+	parsed, validUserAgent := parseClaudeCodeUserAgent(userAgent)
+	if !validUserAgent {
 		return false
 	}
+	entrypoint := parsed.entrypoint
 	if officialDesktopEntrypoints[entrypoint] {
 		return true
 	}
