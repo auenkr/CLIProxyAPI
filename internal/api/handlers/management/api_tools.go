@@ -39,6 +39,7 @@ type apiCallRequest struct {
 	ProxyURL        string            `json:"proxy_url"`
 	Header          map[string]string `json:"header"`
 	Data            string            `json:"data"`
+	NoCache         bool              `json:"no_cache"`
 }
 
 type apiCallResponse struct {
@@ -141,6 +142,21 @@ func (h *Handler) APICall(c *gin.Context) {
 		reqHeaders = map[string]string{}
 	}
 
+	// Cache successful credential-bound GETs (keyed before $TOKEN$ substitution);
+	// any other method on the credential invalidates its cached reads.
+	cacheable := authIndex != "" && method == http.MethodGet && !body.NoCache
+	cacheKey := ""
+	if cacheable {
+		cacheKey = apiCallCacheKey(method, urlStr, requestProxyURL, body.Data, reqHeaders)
+		if cached, ok := sharedAPICallCache.get(authIndex, cacheKey); ok {
+			c.Header("X-CPA-Cache", "hit")
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	} else if authIndex != "" && method != http.MethodGet {
+		defer sharedAPICallCache.purge(authIndex)
+	}
+
 	var hostOverride string
 	var token string
 	var tokenResolved bool
@@ -233,11 +249,15 @@ func (h *Handler) APICall(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, apiCallResponse{
+	result := apiCallResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
 		Body:       string(respBody),
-	})
+	}
+	if cacheable && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		sharedAPICallCache.set(authIndex, cacheKey, result)
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func firstNonEmptyString(values ...*string) string {
