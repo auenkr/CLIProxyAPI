@@ -21,5 +21,9 @@ func (h *Handler) GetUsageCost(c *gin.Context) {
 		days = 7
 	}
 	days = min(days, maxDays)
-	c.JSON(http.StatusOK, h.usageCost.Query(time.Now().Add(-time.Duration(days)*24*time.Hour)))
+	var keyNames map[string]string
+	if cfg := h.configSnapshot(); cfg != nil {
+		keyNames = cfg.APIKeyNames
+	}
+	c.JSON(http.StatusOK, h.usageCost.Query(time.Now().Add(-time.Duration(days)*24*time.Hour), keyNames))
 }

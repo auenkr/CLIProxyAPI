@@ -3,6 +3,8 @@ package usagecost
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/statemirror"
 	"os"
@@ -50,6 +52,8 @@ type bucket struct {
 	Hour     int64  `json:"hour"` // Unix milliseconds, truncated to the hour
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// Key is the SHA-256 hex fingerprint of the client API key; the raw key is never stored.
+	Key      string `json:"key,omitempty"`
 	Requests int64  `json:"requests"`
 	Tokens   Tokens `json:"tokens"`
 }
@@ -106,7 +110,7 @@ func New(path string, pricer *Pricer) *Store {
 	}
 	for i := range list {
 		b := list[i]
-		s.buckets[key(b.Hour, b.Provider, b.Model)] = &b
+		s.buckets[key(b.Hour, b.Provider, b.Model, b.Key)] = &b
 	}
 	s.prune()
 	return s
@@ -122,8 +126,18 @@ func (s *Store) SetMirror(m statemirror.Mirror, key string) {
 // SetPricer swaps the price table; costs are computed at query time.
 func (s *Store) SetPricer(p *Pricer) { s.pricer.Store(p) }
 
-func key(hour int64, provider, model string) string {
-	return provider + "\x00" + model + "\x00" + time.UnixMilli(hour).UTC().Format(time.RFC3339)
+func key(hour int64, provider, model, apiKey string) string {
+	return provider + "\x00" + model + "\x00" + apiKey + "\x00" + time.UnixMilli(hour).UTC().Format(time.RFC3339)
+}
+
+// KeyFingerprint is the SHA-256 hex of a client API key, matching access.api-key-names.
+func KeyFingerprint(apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(apiKey))
+	return hex.EncodeToString(sum[:])
 }
 
 // HandleUsage implements coreusage.Plugin.
@@ -160,12 +174,13 @@ func (s *Store) HandleUsage(_ context.Context, record coreusage.Record) {
 		at = s.now()
 	}
 	hour := at.UnixMilli() / hourMs * hourMs
+	fingerprint := KeyFingerprint(record.APIKey)
 
 	s.mu.Lock()
-	k := key(hour, provider, model)
+	k := key(hour, provider, model, fingerprint)
 	b := s.buckets[k]
 	if b == nil {
-		b = &bucket{Hour: hour, Provider: provider, Model: model}
+		b = &bucket{Hour: hour, Provider: provider, Model: model, Key: fingerprint}
 		s.buckets[k] = b
 	}
 	b.Requests++
@@ -266,6 +281,17 @@ type ModelRow struct {
 	Share    float64 `json:"share"`
 }
 
+// APIKeyRow is one row of the per-client-key breakdown. Only the configured
+// display name and a short fingerprint prefix are exposed, never the key.
+type APIKeyRow struct {
+	Name        string  `json:"name"`
+	Fingerprint string  `json:"fingerprint"`
+	Requests    int64   `json:"requests"`
+	Tokens      Tokens  `json:"tokens"`
+	Costs       Costs   `json:"costs"`
+	Share       float64 `json:"share"`
+}
+
 // ProviderRow is one row of the per-provider summary.
 type ProviderRow struct {
 	Provider string `json:"provider"`
@@ -286,6 +312,7 @@ type Report struct {
 	Hourly       []HourPoint   `json:"hourly"`
 	Models       []ModelRow    `json:"models"`
 	Providers    []ProviderRow `json:"providers"`
+	APIKeys      []APIKeyRow   `json:"api_keys"`
 }
 
 func priceTokens(t Tokens, p Price) Costs {
@@ -301,8 +328,9 @@ func priceTokens(t Tokens, p Price) Costs {
 	return c
 }
 
-// Query aggregates buckets within [since, now].
-func (s *Store) Query(since time.Time) Report {
+// Query aggregates buckets within [since, now]. keyNames maps API key
+// fingerprints to display names (access.api-key-names).
+func (s *Store) Query(since time.Time, keyNames map[string]string) Report {
 	pricer := s.pricer.Load()
 	now := s.now()
 	sinceMs := since.UnixMilli()
@@ -320,6 +348,7 @@ func (s *Store) Query(since time.Time) Report {
 	hours := map[int64]*HourPoint{}
 	models := map[string]*ModelRow{}
 	provs := map[string]*ProviderRow{}
+	keys := map[string]*APIKeyRow{}
 	for _, b := range list {
 		price, priced := pricer.Lookup(b.Model)
 		costs := priceTokens(b.Tokens, price)
@@ -359,6 +388,18 @@ func (s *Store) Query(since time.Time) Report {
 		pr.Requests += b.Requests
 		pr.Tokens.add(b.Tokens)
 		pr.Costs.add(costs)
+
+		kr := keys[b.Key]
+		if kr == nil {
+			kr = &APIKeyRow{Name: keyNames[b.Key]}
+			if len(b.Key) >= 8 {
+				kr.Fingerprint = b.Key[:8]
+			}
+			keys[b.Key] = kr
+		}
+		kr.Requests += b.Requests
+		kr.Tokens.add(b.Tokens)
+		kr.Costs.add(costs)
 	}
 
 	report.Hourly = make([]HourPoint, 0, len(hours))
@@ -379,6 +420,20 @@ func (s *Store) Query(since time.Time) Report {
 			return report.Models[i].Costs.Total > report.Models[j].Costs.Total
 		}
 		return report.Models[i].Model < report.Models[j].Model
+	})
+
+	report.APIKeys = make([]APIKeyRow, 0, len(keys))
+	for _, kr := range keys {
+		if report.Costs.Total > 0 {
+			kr.Share = kr.Costs.Total / report.Costs.Total
+		}
+		report.APIKeys = append(report.APIKeys, *kr)
+	}
+	sort.Slice(report.APIKeys, func(i, j int) bool {
+		if report.APIKeys[i].Costs.Total != report.APIKeys[j].Costs.Total {
+			return report.APIKeys[i].Costs.Total > report.APIKeys[j].Costs.Total
+		}
+		return report.APIKeys[i].Name < report.APIKeys[j].Name
 	})
 
 	report.Providers = make([]ProviderRow, 0, len(provs))

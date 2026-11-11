@@ -29,7 +29,7 @@ func TestQueryPricesByModel(t *testing.T) {
 	s.HandleUsage(context.Background(), record("codex", "custom-x-1", now))
 	s.HandleUsage(context.Background(), record("other", "mystery", now))
 
-	r := s.Query(now.Add(-time.Hour))
+	r := s.Query(now.Add(-time.Hour), nil)
 	if len(r.Models) != 3 || len(r.Hourly) != 1 {
 		t.Fatalf("models=%d hourly=%d", len(r.Models), len(r.Hourly))
 	}
@@ -52,8 +52,28 @@ func TestPersistRoundTrip(t *testing.T) {
 	now := time.Now()
 	s.HandleUsage(context.Background(), record("claude", "claude-haiku-5", now))
 	s.flush()
-	r := New(path, NewPricer(nil)).Query(now.Add(-time.Hour))
+	r := New(path, NewPricer(nil)).Query(now.Add(-time.Hour), nil)
 	if r.Requests != 1 || r.Tokens.Total() != 4_000_000 {
 		t.Fatalf("restored %+v", r.Tokens)
+	}
+}
+
+func TestQueryGroupsByAPIKeyName(t *testing.T) {
+	s := New("", NewPricer(nil))
+	now := time.Now()
+	named := record("claude", "claude-haiku-5", now)
+	named.APIKey = "sk-team"
+	s.HandleUsage(context.Background(), named)
+	s.HandleUsage(context.Background(), named)
+	anon := record("claude", "claude-haiku-5", now)
+	anon.APIKey = "sk-other"
+	s.HandleUsage(context.Background(), anon)
+
+	r := s.Query(now.Add(-time.Hour), map[string]string{KeyFingerprint("sk-team"): "Team"})
+	if len(r.APIKeys) != 2 || r.APIKeys[0].Name != "Team" || r.APIKeys[0].Requests != 2 {
+		t.Fatalf("api keys = %+v", r.APIKeys)
+	}
+	if r.APIKeys[1].Name != "" || r.APIKeys[1].Fingerprint != KeyFingerprint("sk-other")[:8] {
+		t.Fatalf("unnamed row = %+v", r.APIKeys[1])
 	}
 }
