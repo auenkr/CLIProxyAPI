@@ -13,6 +13,7 @@ import (
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/tinybirdlog"
 )
@@ -136,6 +137,95 @@ func TestTinybirdLoggingCapturesBodyOfRejectedRequest(t *testing.T) {
 		t.Fatalf("request_body = %q, want %q", got, body)
 	}
 	if got := ojson.Get(lines[0], "status").Int(); got != http.StatusUnauthorized {
+		t.Fatalf("status = %d", got)
+	}
+}
+
+func TestTinybirdLoggingWebSocketUpgrade(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	events := make(chan string, 1)
+	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip: %v", err)
+			return
+		}
+		defer func() { _ = zr.Close() }()
+		scanner := bufio.NewScanner(zr)
+		for scanner.Scan() {
+			events <- scanner.Text()
+		}
+		if err := scanner.Err(); err != nil {
+			t.Errorf("scan: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer ingest.Close()
+	sink := tinybirdlog.New(config.TinybirdConfig{Enable: true, Token: "tok", Host: ingest.URL})
+	defer sink.Close(context.Background())
+	router := gin.New()
+	// Signal after the logging middleware has queued its event, before closing the sink.
+	done := make(chan struct{})
+	router.Use(func(c *gin.Context) { c.Next(); close(done) })
+	router.Use(TinybirdLoggingMiddleware(sink))
+	router.GET("/v1/responses", func(c *gin.Context) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		kind, message, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(kind, message); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	})
+	server := httptest.NewServer(router)
+	defer server.Close()
+	conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("handshake status = %d", response.StatusCode)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	_, message, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(message) != "hello" {
+		t.Fatalf("echo = %q", message)
+	}
+	<-done
+	sink.Close(context.Background())
+	select {
+	case event := <-events:
+		if got := ojson.Get(event, "status").Int(); got != http.StatusSwitchingProtocols {
+			t.Fatalf("logged status = %d", got)
+		}
+		if got := ojson.Get(event, "response_body").String(); got != "" {
+			t.Fatalf("response body = %q", got)
+		}
+	default:
+		t.Fatal("missing WebSocket event")
+	}
+}
+
+func TestResponseCapturePreservesHTTPStatus(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	capture := &responseCapture{ResponseWriter: c.Writer}
+	capture.WriteHeader(http.StatusCreated)
+	capture.WriteHeader(http.StatusAccepted)
+	if got := capture.Status(); got != http.StatusAccepted {
 		t.Fatalf("status = %d", got)
 	}
 }

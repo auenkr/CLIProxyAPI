@@ -1,13 +1,16 @@
 package middleware
 
 import (
+	"bufio"
 	"bytes"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/tinybirdlog"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -52,7 +55,7 @@ func TinybirdLoggingMiddleware(sink *tinybirdlog.Sink) gin.HandlerFunc {
 			c.Request.Body = replayedBody{Reader: replay, Closer: original}
 		}
 
-		capture := &responseCapture{ResponseWriter: c.Writer}
+		capture := &responseCapture{ResponseWriter: c.Writer, websocketUpgrade: websocket.IsWebSocketUpgrade(c.Request)}
 		c.Writer = capture
 
 		c.Next()
@@ -108,9 +111,29 @@ func TinybirdLoggingMiddleware(sink *tinybirdlog.Sink) gin.HandlerFunc {
 // interfaces keep working for streaming and websocket handlers.
 type responseCapture struct {
 	gin.ResponseWriter
-	body      bytes.Buffer
-	total     int64
-	truncated bool
+	body             bytes.Buffer
+	total            int64
+	truncated        bool
+	websocketUpgrade bool
+	hijacked         bool
+}
+
+// Status reports a successful WebSocket hijack as an upgrade. Other responses
+// retain the underlying writer's status semantics.
+func (w *responseCapture) Status() int {
+	if w.hijacked && w.websocketUpgrade {
+		return http.StatusSwitchingProtocols
+	}
+	return w.ResponseWriter.Status()
+}
+
+// Hijack preserves the connection handoff and records it only after success.
+func (w *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := w.ResponseWriter.Hijack()
+	if err == nil {
+		w.hijacked = true
+	}
+	return conn, rw, err
 }
 
 func (w *responseCapture) record(data []byte) {
