@@ -254,8 +254,11 @@ func (h *Handler) APICall(c *gin.Context) {
 		Header:     resp.Header,
 		Body:       string(respBody),
 	}
-	if cacheable && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		sharedAPICallCache.set(authIndex, cacheKey, result)
+	if cacheable {
+		var stale bool
+		if result, stale = sharedAPICallCache.store(authIndex, cacheKey, result); stale {
+			c.Header("X-CPA-Cache", "stale")
+		}
 	}
 	c.JSON(http.StatusOK, result)
 }

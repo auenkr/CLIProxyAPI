@@ -18,6 +18,9 @@ const apiCallCacheTTL = 60 * time.Second
 type apiCallCacheEntry struct {
 	at   time.Time
 	resp apiCallResponse
+	// lastGood keeps the most recent 2xx response; it outlives TTL and purges so
+	// a rate-limited upstream can still be answered with the last known data.
+	lastGood *apiCallResponse
 }
 
 type apiCallCache struct {
@@ -46,13 +49,16 @@ func (c *apiCallCache) get(authIndex, key string) (apiCallResponse, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[authIndex][key]
-	if !ok || c.now().Sub(entry.at) >= apiCallCacheTTL {
+	if !ok || entry.at.IsZero() || c.now().Sub(entry.at) >= apiCallCacheTTL {
 		return apiCallResponse{}, false
 	}
 	return entry.resp, true
 }
 
-func (c *apiCallCache) set(authIndex, key string, resp apiCallResponse) {
+// store records an upstream result and returns what the client should see:
+// 2xx is cached as-is; 429/5xx falls back to the last good response when one
+// exists, otherwise the error itself is cached so retries stop hammering upstream.
+func (c *apiCallCache) store(authIndex, key string, resp apiCallResponse) (apiCallResponse, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	bucket := c.entries[authIndex]
@@ -60,24 +66,39 @@ func (c *apiCallCache) set(authIndex, key string, resp apiCallResponse) {
 		bucket = map[string]apiCallCacheEntry{}
 		c.entries[authIndex] = bucket
 	}
+	entry := bucket[key]
 	now := c.now()
-	for k, e := range bucket {
-		if now.Sub(e.at) >= apiCallCacheTTL {
-			delete(bucket, k)
+	stale := false
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		good := resp
+		entry.lastGood = &good
+	case resp.StatusCode == 429 || resp.StatusCode >= 500:
+		if entry.lastGood != nil {
+			resp, stale = *entry.lastGood, true
 		}
+	default:
+		return resp, false
 	}
-	bucket[key] = apiCallCacheEntry{at: now, resp: resp}
+	entry.at, entry.resp = now, resp
+	bucket[key] = entry
+	return resp, stale
 }
 
-// purge drops cached responses for one auth index, or everything when empty.
+// purge marks cached responses stale for one auth index (or all when empty);
+// last good responses are kept as a rate-limit fallback.
 func (c *apiCallCache) purge(authIndex string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if authIndex == "" {
-		c.entries = map[string]map[string]apiCallCacheEntry{}
-		return
+	for idx, bucket := range c.entries {
+		if authIndex != "" && idx != authIndex {
+			continue
+		}
+		for k, e := range bucket {
+			e.at = time.Time{}
+			bucket[k] = e
+		}
 	}
-	delete(c.entries, authIndex)
 }
 
 // PurgeAPICallCache clears cached api-call responses so the next request hits upstream.
