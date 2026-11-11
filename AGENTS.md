@@ -67,4 +67,12 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 ##  CURRENT DEPLOYMENT
 
 It is deployed on the machine -> and expose via cloudflare tunnel
-Its running via service and the binary present in ./bin.cli-proxy-api and its config present in ./bin/config.toml
+Its running via user service and the binary present in ./bin.cli-proxy-api 
+Its config is saved in the postgres db using PGSTORE_DSN env 
+
+The frontend repo deployment -> push to main for manamgenet ui subrepo, wait till github action for release completed.
+After that restart the service, it will pull html files automatically and it will work.
+- The server serves the panel from `bin/pgstore/config/static/management.html` (PGSTORE spool dir), NOT `bin/static/`. If the restart does not pick up the release, copy `management-ui/dist/index.html` there directly. No restart is needed.
+- Restart with `systemctl --user restart cliproxyapi.service` (user service, no sudo).
+- Verify the served panel: `curl -s localhost:8317/management.html` and grep for the expected change.
+- Do not keep backups of `management.html`.
