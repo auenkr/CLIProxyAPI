@@ -59,6 +59,7 @@ func (h *Handler) collectQuota(ctx context.Context) {
 			continue
 		}
 		store.Add(samples)
+		publishQuotaUsage(auth.ID, samples)
 	}
 }
 
@@ -397,6 +398,23 @@ func quotaPayloadSamples(provider, name string, at int64, payload map[string]any
 		}
 	}
 	return samples
+}
+
+// publishQuotaUsage shares polled usage with the routing timeline. When a window has
+// several buckets (e.g. Antigravity model groups) the most used one wins.
+func publishQuotaUsage(authID string, samples []quotahistory.Sample) {
+	used := make(map[string]float64)
+	var at int64
+	for _, sample := range samples {
+		value := 100 - sample.Remaining
+		if prev, ok := used[sample.Window]; !ok || value > prev {
+			used[sample.Window] = value
+		}
+		if sample.At > at {
+			at = sample.At
+		}
+	}
+	coreauth.SetQuotaUsage(authID, used, time.UnixMilli(at))
 }
 
 func quotaNumber(value any) (float64, bool) {

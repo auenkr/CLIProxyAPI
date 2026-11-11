@@ -579,6 +579,24 @@ type RoutingConfig struct {
 	//     keep the binding and return the error (or retry the same credential) instead.
 	// Ignored when SessionAffinity is false.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
+
+	// Timeline is an ordered, one-off routing plan. Per provider, the first block that has
+	// not ended and still has credentials under their usage limits receives all traffic.
+	// When no block applies, normal routing resumes.
+	Timeline []RoutingTimelineBlock `yaml:"timeline,omitempty" json:"timeline,omitempty"`
+}
+
+// RoutingTimelineBlock routes a provider to specific credentials until Until, or until a
+// credential reaches one of the usage limits, whichever comes first.
+type RoutingTimelineBlock struct {
+	Provider string `yaml:"provider" json:"provider"`
+	// Accounts lists credential IDs as reported by the auth-files API.
+	Accounts []string `yaml:"accounts" json:"accounts"`
+	// Until is the RFC 3339 instant at which the block ends.
+	Until string `yaml:"until" json:"until"`
+	// MaxFiveHourUsage and MaxWeeklyUsage are used percentages (1-100); 0 disables the limit.
+	MaxFiveHourUsage float64 `yaml:"max-5h-usage,omitempty" json:"max-5h-usage,omitempty"`
+	MaxWeeklyUsage   float64 `yaml:"max-weekly-usage,omitempty" json:"max-weekly-usage,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

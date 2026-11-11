@@ -88,6 +88,7 @@ type authSelectionEligibility struct {
 	credentialPolicy string
 	disallowFreeAuth bool
 	officialClient   *officialClientCheck
+	timeline         *timelineDecision
 }
 
 func withRequiredAuthKind(ctx context.Context, requiredKind string) context.Context {
@@ -116,6 +117,7 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 	if eligibility.officialClient == nil {
 		eligibility.officialClient = newOfficialClientCheck(ctx, opts)
 	}
+	eligibility.timeline = currentTimelineDecision(time.Now())
 	return eligibility
 }
 
@@ -130,6 +132,9 @@ func (e authSelectionEligibility) allows(auth *Auth) bool {
 		return false
 	}
 	if !e.officialClient.allows(auth) {
+		return false
+	}
+	if !e.timeline.allows(auth) {
 		return false
 	}
 	return !e.disallowFreeAuth || !isFreeCodexAuth(auth)

@@ -105,6 +105,33 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 	return state
 }
 
+// applyRoutingTimeline publishes the configured timeline to the credential scheduler.
+// Blocks with an unparsable end time or no accounts are skipped.
+func applyRoutingTimeline(cfg *config.Config) {
+	if cfg == nil {
+		coreauth.SetRoutingTimeline(nil)
+		return
+	}
+	blocks := make([]coreauth.TimelineBlock, 0, len(cfg.Routing.Timeline))
+	for _, block := range cfg.Routing.Timeline {
+		until, errParse := time.Parse(time.RFC3339, strings.TrimSpace(block.Until))
+		if errParse != nil || len(block.Accounts) == 0 || strings.TrimSpace(block.Provider) == "" {
+			log.Warnf("routing timeline: skipping invalid block for provider %q", block.Provider)
+			continue
+		}
+		blocks = append(blocks, coreauth.TimelineBlock{
+			Provider: block.Provider,
+			Accounts: block.Accounts,
+			Until:    until,
+			MaxUsage: map[string]float64{
+				coreauth.QuotaWindowFiveHour: block.MaxFiveHourUsage,
+				coreauth.QuotaWindowWeekly:   block.MaxWeeklyUsage,
+			},
+		})
+	}
+	coreauth.SetRoutingTimeline(blocks)
+}
+
 func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 	var selector coreauth.Selector
 	switch state.strategy {
@@ -277,6 +304,7 @@ func (s *Service) applyManagerConfig(ctx context.Context, commit configCommit) b
 		s.coreManager.SetSelector(newRoutingSelector(routingState))
 		s.appliedRoutingState = &routingState
 	}
+	applyRoutingTimeline(commit.cfg)
 	s.applyRetryConfig(commit.cfg)
 	store := s.resolveCooldownStateStore(commit.cfg)
 	if !s.coreManager.ApplyConfigWithCooldownStateStore(ctx, commit.cfg, store) {
